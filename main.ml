@@ -2,6 +2,70 @@ open Core_kernel
 open Format
 open Bap.Std
 
+let ws = Word.to_string
+let wi = Word.to_int_exn
+
+type sign = Pos | Neg [@@deriving sexp]
+
+type finite = {
+  sign : sign;
+  expn : word;
+  frac : word;
+} [@@deriving sexp]
+
+type gfloat =
+  | Inf  of sign
+  | Nan of bool * word
+  | Normal of finite
+[@@deriving sexp]
+
+(* no implicit bits! *)
+let mk sign expn frac = Normal {sign; expn; frac}
+
+let word_of_sign = function
+  | Pos -> Word.b0
+  | Neg -> Word.b1
+
+let drop_hd w =
+  let hi = Word.bitwidth w - 2 in
+  Word.extract_exn ~hi w
+
+let single_of_float f =
+  let w = Word.of_int32 ~width:32 (Int32.bits_of_float f) in
+  let sign = Word.extract_exn ~hi:31 ~lo:31 w in
+  let sign = if Word.is_zero sign then Pos else Neg in
+  let expn = Word.extract_exn ~hi:30 ~lo:23 w in
+  let bias = Word.of_int ~width:8 127 in
+  let expn = Word.(expn - bias) in
+  let frac = Word.extract_exn ~hi:22 w in
+  let frac = Word.concat Word.b1 frac in
+  let n = Word.bitwidth frac - 1 in
+  let expn = Word.(expn - (of_int ~width:(bitwidth expn) n)) in
+  mk sign expn frac
+
+let to_ieee_float_bits t = match t with
+  | Normal {sign; expn; frac} ->
+    let bias = Word.of_int ~width:8 127 in
+    let expn = Word.(bias + expn) in
+    let n = Word.bitwidth frac - 1 in
+    let expn = Word.(expn + (of_int ~width:(bitwidth expn) n)) in
+    let frac = drop_hd frac in
+    let frac =
+      let w = Word.bitwidth frac in
+      let hi = w - 1 in
+      let lo = hi - 23 + 1 in
+      Word.extract_exn ~hi ~lo frac in
+    let (^) = Word.concat in
+    word_of_sign sign ^ expn ^ frac
+  | _ -> failwith "todo"
+
+let test_construct =
+  let x = 0.42 in
+  let y = single_of_float x in
+  let z = to_ieee_float_bits y in
+  let z = Int32.float_of_bits (Word.to_int32_exn z) in
+  printf "test construct %g ~= %g\n" x z
+
 let enum_bits w =
   let bits = Word.enum_bits w BigEndian in
   let b_len = Seq.length bits in
@@ -17,281 +81,74 @@ let string_of_bits w =
       if x then s @@ 1
       else s @@ 0)
 
-module Sema = struct
+let lshift x n =
+  let expn = Word.(x.expn - n) in
+  let frac = Word.(x.frac lsl n) in
+  {x with expn; frac}
 
-  (* precision is a total digits, with an explicit integer bit,
-     as it is in ieee 754 *)
-  type t = {
-    max_exponent : int;
-    precision : int;
-    total : int;
-    integer_bit : bool;
-  }
+let rshift x n =
+  let expn = Word.(x.expn + n) in
+  let frac = Word.(x.frac lsr n) in
 
-  let min_exponent t = 1 - t.max_exponent
-  let max_exponent t = t.max_exponent
-  let precision t = t.precision
-  let total t = t.total
-  let bias t = t.max_exponent
-  let integer_bit t = t.integer_bit
+  printf "%s >> %s = %s\n" (ws x.frac) (ws n) (ws frac);
 
-  let pow2 n = int_of_float (2.0 ** float_of_int n)
-
-  let create ?(integer_bit=false) ~exp_bits total =
-    let max_exponent = pow2 (exp_bits - 1) - 1 in
-    let precision =
-      if integer_bit then total - exp_bits - 1
-      else  total - exp_bits in
-    { max_exponent; precision; total; integer_bit; }
-
-  let ieee_single = create ~exp_bits:8 32
-  let ieee_double = create ~exp_bits:11 64
-  let x87_double_ext = create ~integer_bit:true ~exp_bits:15 80
-
-end
-
-type sema = Sema.t
-
-type cmp =
-  | Unordered
-  | LessThan
-  | GreaterThan
-  | Equal
-
-type cat =
-  | Normal
-  | Subnormal
-  | Nan
-  | Inf
-  | Zero
-
-module Category = struct
-
-  type t = cat
-
-  let is_normal sema e =
-    1 - Sema.bias sema <= e && e <= 2 * Sema.max_exponent sema
-
-  let is_nan sema e fra =
-    e = 2 * Sema.max_exponent sema + 1 && not (Word.is_zero fra)
-
-  let is_inf sema e fra =
-    e = 2 * Sema.max_exponent sema + 1 && Word.is_zero fra
-
-  let is_subnormal e fra = e = 0 && not (Word.is_zero fra)
-  let is_zero e fra = e = 0 && Word.is_zero fra
-
-  (** [create sema biased_exp fraction]  *)
-  let create sema exp fra =
-    let exp = exp - Sema.bias sema in
-    if is_normal sema exp then Normal
-    else if is_nan sema exp fra then Nan
-    else if is_inf sema exp fra then Inf
-    else if is_subnormal exp fra  then Subnormal
-    else Zero
-
-end
+  {x with expn; frac}
 
 
-module Try = struct
+(* TODO: what if overflow/underflow here?? *)
+let add x y = match x,y with
+  | Normal x, Normal y ->
+    begin
+      let expn = Word.max x.expn y.expn in
+      let x = rshift x Word.(expn - x.expn) in
+      let y = rshift y Word.(expn - y.expn) in
+      let frac = Word.(x.frac + y.frac) in
+      Normal {sign = x.sign; expn; frac}
+    end
+  | _ -> failwith "TODO"
 
-  open Sema
 
-  type my_float = {
-    sign : bool;
-    exp  : int; (* biased exp, i.e. E = e + bias  *)
-    fra  : word;
-    sema : sema;
-  }
+(* TODO: what if overflow/underflow here?? *)
+let sub x y = match x,y with
+  | Normal x, Normal y ->
+    begin
+      let diff = Word.(x.expn - y.expn) in
 
-  let msb t =
-    let bits = enum_bits t.fra in
-    match Seq.findi bits ~f:(fun i x -> x) with
-    | None -> None
-    | Some (i,_) -> Some (Word.bitwidth t.fra - i)
+      let x = lshift x Word.b1 in
+      let y = rshift y Word.(diff - b1) in
+      let frac = Word.(x.frac - y.frac) in
 
-  let lsb t =
-    let bits = Seq.to_list_rev (enum_bits t.fra) in
-    match List.findi bits ~f:(fun i x -> x) with
-    | None -> None
-    | Some (i,_) -> Some i
+      printf "subtract: x: %d * %s; y: %d * %s\n"
+        (wi x.expn) (ws x.frac)
+        (wi y.expn) (ws y.frac);
 
-  let handle_overflow () = failwith "overflow handling is not implemented"
 
-  let lsl_fra fra bits =
-    let bits = Word.of_int ~width:(Word.bitwidth fra) bits in
-    Word.(fra lsl bits)
+      (* let x = rshift x Word.(diff - x.expn) in *)
+      let y = rshift y diff in
 
-  let lsr_fra fra bits =
-    let bits = Word.of_int ~width:(Word.bitwidth fra) bits in
-    Word.(fra lsr bits)
+      printf "common: x: %d * %s; y: %d * %s\n"
+        (wi x.expn) (ws x.frac)
+        (wi y.expn) (ws y.frac);
 
-  let shift_fra_left t bits =
-    {t with exp = t.exp - bits; fra = lsl_fra t.fra bits}
+      let frac = Word.(x.frac - y.frac) in
 
-  let shift_fra_right t bits =
-    let gone = Word.extract_exn ~hi:(bits - 1) t.fra  in
-    {t with exp = t.exp + bits; fra = lsr_fra t.fra bits}, gone
+      printf "x < y %b\n" Word.(x.frac < y.frac);
 
-  let exp_bits s = Sema.total s - Sema.precision s
 
-  let fraction t = Word.extract ~hi:(Word.bitwidth t.fra - 2) t.fra
+      let expn,frac = if Word.(x.frac < y.frac) then
+          Word.pred x.expn,
+          Word.(frac lsl Word.b1)
+          else x.expn, frac in
 
-  (* Add a category? for subnormal *)
-  let cat t = Category.create t.sema t.exp t.fra
 
-  (* TODO: a rounding propably should be used here  *)
-  (* TODO: result should reflect what exactly we got: Norm, Inf, Nan *)
-  (* TODO: normalize should affect a leading significant bit *)
-  let normalize t =
-    match cat t with
-    | Normal -> t
-    | _ -> match msb t with
-      | None -> failwith "will see"
-      | Some msb ->
-        let change = msb - Sema.precision t.sema in
-        if (t.exp + change > Sema.max_exponent t.sema) then
-          handle_overflow ()
-        else
-          let change =
-            if t.exp + change < min_exponent t.sema then
-              min_exponent t.sema - t.exp
-            else change in
-          if change < 0 then
-            shift_fra_left t (abs change)
-          else if change > 0 then
-            fst @@ shift_fra_right t change
-          else t
+      (* let expn = Word.pred x.expn in *)
+      (* let frac = Word.(frac lsl Word.b1) in *)
 
-  let check_length sema bits =
-    let bitwidth = Word.bitwidth bits in
-    let total = Sema.total sema in
-    if bitwidth < total then
-      failwith
-        (sprintf "Failed to create float: %d bits expected, %d got"
-           total bitwidth)
 
-  let sign_exn sema bits =
-    let sign_bit = Sema.total sema - 1 in
-    Word.extract_exn ~hi:sign_bit ~lo:sign_bit bits |> Word.is_one
+      Normal {sign = x.sign; expn; frac}
+    end
+  | _ -> failwith "TODO"
 
-  let exp_hi sema = Sema.total sema - 2
-  let exp_lo sema = Sema.precision sema - 1
-
-  let exp_exn sema bits =
-    Word.extract_exn ~hi:(exp_hi sema) ~lo:(exp_lo sema) bits |>
-    Word.to_int_exn
-
-  let fra_exn sema bits =
-    if Sema.integer_bit sema then
-      Word.extract_exn ~hi:(Sema.precision sema - 1) bits
-    else
-      let exp = exp_exn sema bits in
-      let fra = Word.extract_exn ~hi:(Sema.precision sema - 2) bits in
-      let leading_bit = match Category.create sema exp fra with
-        | Normal -> Word.b1
-        | _ -> Word.b0 in
-      Word.concat leading_bit fra
-
-  (** [of_bits sema bits] - create only from normal bits *)
-  let of_bits sema bits =
-    check_length sema bits;
-    let sign = sign_exn sema bits in
-    let exp = exp_exn sema bits in
-    let fra = fra_exn sema bits in
-    normalize {sign; exp; fra; sema}
-
-  let to_bitstring t =
-    let exp = t.exp in
-    let sign = if t.sign then "1" else "0" in
-    let exp = Word.of_int ~width:(exp_hi t.sema - exp_lo t.sema + 1) exp in
-    let fra = Word.extract_exn ~hi:(exp_lo t.sema - 1) t.fra in
-    sprintf "%s%s%s" sign (string_of_bits exp) (string_of_bits fra)
-
-  (* TODO: check an integer bit here and add it if needed  *)
-  let bits t =
-    let sign = if t.sign then Word.b1 else Word.b0 in
-    let exp = Word.of_int ~width:(exp_bits t.sema) t.exp in
-    let fra = Word.extract_exn ~hi:(exp_lo t.sema - 1) t.fra in
-    Word.concat (Word.concat sign exp) fra
-
-  let to_string_temp t =
-    let exp = t.exp - Sema.bias t.sema in
-    let base = 2.0 ** float exp in
-    let bits = enum_bits t.fra in
-    let _,m = Seq.fold bits ~init:(1.0,0.0) ~f:(fun (d,r) b ->
-        let r = if b then r +. 2.0 ** (~-. d)
-          else r in
-        d +. 1.0, r) in
-    let sign = if t.sign then "-" else "" in
-    sprintf "%s%f" sign ((1.0 +. m) *. base )
-
-  let cmp f x y =
-    let r = f x y in
-    if Int.(r > 0) then GreaterThan
-    else if Int.(r < 0) then LessThan
-    else Equal
-
-  let cmp_abs x y =
-    match cmp Int.compare x.exp y.exp with
-    | Equal -> cmp Word.compare x.fra y.fra
-    | x -> x
-
-  let is_pos t = not t.sign
-
-  let cmp_of_sign x y =
-    if x.sign = y.sign then Equal
-    else if is_pos x then GreaterThan
-    else LessThan
-
-  (* TODO: what to do with the subnormal numbers  *)
-  let cmp x y =
-    match cat x, cat y with
-    | Nan, _ | _, Nan -> Unordered
-    | Inf, Normal | Inf, Zero | Normal, Zero ->
-      if is_pos x then GreaterThan else LessThan
-    | Normal, Inf | Zero, Inf | Zero, Normal ->
-      if is_pos y then LessThan else GreaterThan
-    | Inf, Inf -> cmp_of_sign x y
-    | Zero, Zero -> Equal
-    | Normal, Normal ->
-      if x.sign <> y.sign then cmp_of_sign x y
-      else
-        let r = cmp_abs x y in
-        if is_pos x then r
-        else match r with
-          | GreaterThan -> LessThan
-          | LessThan -> GreaterThan
-          | x -> x
-
-  let add x y =
-    let x',y', gone =
-      let dif = abs (x.exp - y.exp) in
-      if x.exp > y.exp then
-        let y', gone = shift_fra_right y dif in
-        x, y', gone
-      else
-        let x', gone = shift_fra_right x dif in
-        x', y, gone in
-    let _gone' = Word.extract_exn ~hi:(Word.bitwidth x.fra - 1) gone in
-    let fra = Word.(x'.fra + y'.fra) in
-    normalize {x with exp = x'.exp ; fra}
-
-end
-
-let single_of_float f =
-  let w = Word.of_int32 ~width:32 (Int32.bits_of_float f) in
-  Try.of_bits Sema.ieee_single w
-
-let double_of_float f =
-  let w = Word.of_int64 ~width:64 (Int64.bits_of_float f) in
-  Try.of_bits Sema.ieee_double w
-
-let float_of_single x =
-  Int32.float_of_bits (Word.to_int32_exn (Try.bits x))
-
-let float_of_double x =
-  Int64.float_of_bits (Word.to_int64_exn (Try.bits x))
 
 module Test_space = struct
 
@@ -299,13 +156,61 @@ module Test_space = struct
     let x = Int32.bits_of_float x in
     Word.of_int32 ~width:32 x
 
+  let string_of_bits32 w =
+    let bits = enum_bits w in
+    let (@@) = sprintf "%s%d" in
+    Seq.foldi bits ~init:"" ~f:(fun i acc x ->
+        let a =
+          if i = 1 || i = 9 then "_"
+          else "" in
+        let s = sprintf "%s%s" acc a in
+        if x then s @@ 1
+        else s @@ 0)
+
+  let bits_of_float x =
+    string_of_bits32 (Word.of_int32 (Int32.bits_of_float x))
+
   let test1 =
-    let z = 4.2 in
-    let q = 2.78 in
-    let b1 = double_of_float q in
-    let b2 = double_of_float z in
-    let b = Try.add b1 b2 in
-    let x = float_of_double b in
-    printf "%g + %g = %g\n" z q x
+    let x = 4.2 in
+    let y = 2.98 in
+    let z = x +. y in
+    let f1 = single_of_float x in
+    let f2 = single_of_float y in
+    let fr = add f1 f2 in
+    let fb = to_ieee_float_bits fr in
+    let r = Int32.float_of_bits (Word.to_int32_exn fb) in
+    printf "should: %s\n" (bits_of_float z);
+    printf "got   : %s\n" (string_of_bits32 fb);
+    printf "%g + %g = %g(%g)\n\n" x y r z
+
+  let test2 =
+    let x = 4.2 in
+    let y = 2.28 in
+    let z = x -. y in
+    let f1 = single_of_float x in
+    let f2 = single_of_float y in
+    let fr = sub f1 f2 in
+    let fb = to_ieee_float_bits fr in
+    let r = Int32.float_of_bits (Word.to_int32_exn fb) in
+    printf "should: %s\n" (bits_of_float z);
+    printf "got   : %s\n" (string_of_bits32 fb);
+    printf "%g - %g = %g(%g)\n\n" x y r z
+
+
+
+  let test3 =
+    let x = 4.28 in
+    let y = 2.2 in
+    let z = x -. y in
+    let f1 = single_of_float x in
+    let f2 = single_of_float y in
+    let fr = sub f1 f2 in
+    let fb = to_ieee_float_bits fr in
+    let r = Int32.float_of_bits (Word.to_int32_exn fb) in
+    printf "should: %s\n" (bits_of_float z);
+    printf "got   : %s\n" (string_of_bits32 fb);
+    printf "%g - %g = %g(%g)\n\n" x y r z
+
+
 
 end
