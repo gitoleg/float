@@ -68,19 +68,23 @@ module Shift = struct
     if n = 0 then 1
     else run radix 1
 
-  let left radix x n =
-    if n = 0 then x
+  let lshift_frac radix frac n =
+    if n = 0 then frac
     else
-      let k = Word.of_int ~width:(Word.bitwidth x.frac) (pow radix n) in
-      let frac = Word.(x.frac * k) in
-      { x with expn = x.expn - n; frac }
+      let k = Word.of_int ~width:(Word.bitwidth frac) (pow radix n) in
+      Word.(frac * k)
+
+  let rshift_frac radix frac n =
+    if n = 0 then frac
+    else
+      let k = Word.of_int ~width:(Word.bitwidth frac) (pow radix n) in
+      Word.(frac / k)
+
+  let left radix x n =
+    { x with expn = x.expn - n; frac = lshift_frac radix x.frac n }
 
   let right radix x n =
-    if n = 0 then x
-    else
-      let k = Word.of_int ~width:(Word.bitwidth x.frac) (pow radix n) in
-      let frac = Word.(x.frac / k ) in
-      { x with expn = x.expn + n; frac }
+    { x with expn = x.expn + n; frac = rshift_frac radix x.frac n }
 
 end
 
@@ -96,20 +100,42 @@ let drop_hd w =
 
 let hd_exn w = Seq.hd_exn (enum_bits w)
 
-(* min exponent without bit loss  *)
-let norm radix x =
+(* min exponent without bit loss, fraction shifted
+   as left as possible, i.e. it occupies more
+   significant bits *)
+let minimize_exponent radix x =
   let width = Word.bitwidth x.frac in
   let rec run x =
     let y = Shift.left radix x 1 in
     let z = Word.extract_exn ~lo:width y.frac in
     if Word.is_zero z then run y
     else x in
-  let frac = Word.concat (Word.zero width) x.frac in
-  let x = run {x with frac} in
-  let frac = Word.extract_exn ~hi:(width - 1) x.frac in
-  {x with frac}
+  if Word.is_zero x.frac then x
+  else
+    let frac = Word.concat (Word.zero width) x.frac in
+    let x = run {x with frac} in
+    let frac = Word.extract_exn ~hi:(width - 1) x.frac in
+    {x with frac}
 
-(* no implicit bits! *)
+(* max exponent without bit loss, fraction shifted
+   as right as possible, i.e. it occupies less
+   significant bits *)
+let maximize_exponent radix x =
+  let width = Word.bitwidth x.frac in
+  let rec run x =
+    let y = Shift.right radix x 1 in
+    let z = Word.extract_exn ~hi:(width - 1) y.frac in
+    if Word.is_zero z then run y
+    else x in
+  if Word.is_zero x.frac then x
+  else
+    let frac = Word.concat x.frac (Word.zero width) in
+    let x = run {x with frac} in
+    let frac = Word.extract_exn ~lo:width x.frac in
+    {x with frac}
+
+let norm = minimize_exponent
+
 let mk ~radix sign expn frac =
   let fin = {sign; expn; frac} in
   let value = norm radix fin in
@@ -165,30 +191,52 @@ let add_or_sub subtract a b = match a.value,b.value with
 let add = add_or_sub false
 let sub = add_or_sub true
 
+let align radix precision x =
+  let rec run x =
+    match msb x.frac with
+    | None -> x
+    | Some i when i < precision -> x
+    | _ -> run (Shift.right radix x 1) in
+  run x
+
 let mul a b = match a.value,b.value with
   | Fin x, Fin y ->
+    let x = maximize_exponent a.radix x in
+    let y = maximize_exponent a.radix y in
+    let precision = Word.bitwidth x.frac in
     let expn = x.expn + y.expn in
-    let width = Word.bitwidth x.frac in
-    let zeros = Word.zero (width + 1) in
+    let zeros = Word.zero (precision + 1) in
     let xfrac = Word.concat zeros x.frac in
     let yfrac = Word.concat zeros y.frac in
     let frac = Word.(xfrac * yfrac) in
-    let msb = Option.value_exn (msb frac) in
-    let frac = Word.extract_exn ~hi:msb ~lo:(msb - width + 1) frac in
-    let value = norm a.radix {x with expn; frac } in
-    {a with value = Fin value  }
+    let x' = align a.radix precision {x with expn; frac} in
+    let expn, frac = x'.expn, x'.frac in
+
+    let frac = Word.extract_exn ~hi:(precision - 1) frac in
+    let value = norm a.radix {x with expn; frac} in
+
+    {a with value = Fin value }
   | _ -> failwith "TODO"
 
 module Front = struct
 
+  (* max exponent, precision  *)
+  let single = `Signle (127,24)
+  let double = `Double (1023,53)
+
+  let single_bits x = Word.of_int32 (Int32.bits_of_float x)
+  let double_bits x = Word.of_int64 (Int64.bits_of_float x)
+
   let single_of_float f =
-    let w = Word.of_int32 ~width:32 (Int32.bits_of_float f) in
+    let w = Word.of_int32 (Int32.bits_of_float f) in
     let sign = Word.extract_exn ~hi:31 ~lo:31 w in
     let sign = if Word.is_zero sign then Pos else Neg in
     let expn' = Word.extract_exn ~hi:30 ~lo:23 w in
     let bias = 127 in
     let expn = Word.to_int_exn expn' - bias in
     let frac = Word.extract_exn ~hi:22 w in
+    let dexp = Word.bitwidth frac in
+    let expn = expn - dexp in
     let frac = Word.concat Word.b1 frac in
     mk ~radix:2 sign expn frac
 
@@ -204,9 +252,12 @@ module Front = struct
     run biased_expn frac
 
   let to_ieee_float_bits t = match t.value with
-    | Fin {sign; expn; frac} when t.radix = 2 ->
+    | Fin x when t.radix = 2 ->
+      let {sign; expn; frac} = norm t.radix x in
       let bias = 127 in
       let expn = bias + expn in
+      let n = Word.bitwidth frac - 1 in
+      let expn = expn + n in
       let frac = drop_hd frac in
       let expn,frac = normalize_ieee bias expn frac in
       let expn = Word.of_int ~width:8 expn in
@@ -214,7 +265,13 @@ module Front = struct
       word_of_sign sign ^ expn ^ frac
     | _ -> failwith "todo"
 
+  let truncate_zeros x =
+    match String.index x '.' with
+    | None -> x
+    | Some p -> String.rstrip ~drop:(fun c -> Char.equal c '0') x
+
   let decimal_of_string x =
+    let x = truncate_zeros x in
     let is_neg = List.hd_exn (String.to_list x) = '-' in
     let start, point =
       let p = String.index_exn x '.' in
@@ -241,31 +298,13 @@ end
 
 module Test_space = struct
 
-  let test_dec  =
-    let create = Front.decimal_of_string in
-    let undo = Front.float_of_decimal in
-    let test x =
-      let v = create x in
-      let y = undo v in
-      printf "constructing %s -> %.6f\n" x y in
-    test "-4.2";
-    test "0.42";
-    test "1323.66";
-    test "0.0001";
-    test "-42.3";
-    let x = sub (create "0.0001") (create "4.2") in
-    printf "ss %g\n" (undo x)
-
-  let test_construct () =
-    let create x =
-      let y = Front.single_of_float x in
-      let z = Front.to_ieee_float_bits y in
-      let z = Int32.float_of_bits (Word.to_int32_exn z) in
-      printf "test construct %g ~ %g\n" x z in
-    create 4.2;
-    create 4.28;
-    create 2.2;
-    create 7.18
+  let deconstruct x =
+    let w = Word.of_int32 (Int32.bits_of_float x) in
+    let expn = Word.extract_exn ~hi:30 ~lo:23 w in
+    let bias = Word.of_int ~width:8 127 in
+    let expn = Word.(expn - bias) in
+    let frac = Word.extract_exn ~hi:22 w in
+    printf "ocaml: expn %d, frac %s\n" (wi expn) (string_of_bits frac)
 
   let word_of_float x =
     let x = Int32.bits_of_float x in
@@ -299,87 +338,103 @@ module Test_space = struct
     | Div -> failwith "unimplemented"
 
   let compare_str x y =
-    if String.equal x y then "" else "POSSIBLE FAIL"
+    if String.equal x y then "ok" else "POSSIBLE FAIL"
 
-  let run op x y =
-    let z = true_result x y op in
+  let my_string_of_float x = sprintf "%.15f" x
+
+  let decimal op x y =
+    let f1 = Front.decimal_of_string (my_string_of_float x) in
+    let f2 = Front.decimal_of_string (my_string_of_float y) in
+    let fr = (f_of_op op) f1 f2 in
+    Front.float_of_decimal fr
+
+  let ieee_single32 op x y =
     let f1 = Front.single_of_float x in
     let f2 = Front.single_of_float y in
     let fr = (f_of_op op) f1 f2 in
     let fb = Front.to_ieee_float_bits fr in
     let fb = Word.signed fb in
-    let r = Int32.float_of_bits (Word.to_int32_exn fb) in
-    let str1 = sprintf "%g\n" z in
-    let str2 = sprintf "%g\n" r in
-    (* printf "should: %s\n" (bits_of_float z); *)
-    (* printf "got   : %s\n" (string_of_bits32 fb); *)
-    printf "bin: %g %s %g = %g(%g)%s\n" x (str_of_op op) y r z
-      (compare_str str1 str2)
+    Int32.float_of_bits (Word.to_int32_exn fb)
 
-  let run' op x y =
-    let z = true_result (float_of_string x) (float_of_string y) op in
-    let f1 = Front.decimal_of_string x in
-    let f2 = Front.decimal_of_string y in
-    let fr = (f_of_op op) f1 f2 in
-    let r = Front.float_of_decimal fr in
-    let str1 = sprintf "%g\n" z in
-    let str2 = sprintf "%g\n" r in
-    printf "dec: %s %s %s = %g(%g)%s\n" x (str_of_op op) y r z
-      (compare_str str1 str2)
+  let run op x y =
+    let res = true_result x y op in
+    let bin = ieee_single32 op x y in
+    let dec = decimal op x y in
+    let res_str = sprintf "%f\n" res in
+    let bin_str = sprintf "%f\n" bin in
+    let dec_str = sprintf "%f\n" dec in
+    printf "bin: %g %s %g = %g(%g) %s\n" x (str_of_op op) y bin res
+      (compare_str res_str bin_str);
+    printf "dec: %g %s %g = %g(%g) %s\n" x (str_of_op op) y dec res
+      (compare_str res_str dec_str)
 
-  let neg x = ~-. x
-  let (+) = run Add
-  let (-) = run Sub
-  let ( * ) = run Mul
-  let ( / ) = run Div
-  let (+.) = run' Add
-  let (-.) = run' Sub
-  let ( *. ) = run' Mul
-  let ( /. ) = run' Div
+  module Main_test(F : T) = struct
 
-  let () = 4.2 + 2.3
-  let () = 4.2 + 2.98
-  let () = 2.2 + 4.28
-  let () = 2.2 + (neg 4.28)
-  let () = (neg 2.2) + 4.28
-  let () = 2.2 + 2.46
-  let () = 0.0000001 + 0.00000002
+    let create x =
+      let bin x =
+        let y = Front.single_of_float x in
+        let z = Front.to_ieee_float_bits y in
+        let z = Word.signed z in
+        Int32.float_of_bits (Word.to_int32_exn z) in
+      let dec x =
+        let x = my_string_of_float x in
+        let v = Front.decimal_of_string x in
+        Front.float_of_decimal v in
+      let run x =
+        let res = sprintf "%g" x in
+        let bin = sprintf "%g" (bin x) in
+        let dec = sprintf "%g" (dec x) in
+        let cmp_bin = compare_str res bin in
+        let cmp_dec = compare_str res dec in
+        printf "make: from %s, bin %s, dec %s\n"
+          res cmp_bin cmp_dec in
+      run x
 
-  let () = "4.2" +. "2.3"
-  let () = "4.2" +. "2.98"
-  let () = "2.2" +. "4.28"
-  let () = "2.2" +. "-4.28"
-  let () = "-2.2" +. "4.28"
-  let () = "2.2" +. "2.46"
-  let () = "0.0000001" +. "0.00000002"
+    let neg x = ~-. x
+    let (+) = run Add
+    let (-) = run Sub
+    let ( * ) = run Mul
+    let ( / ) = run Div
+    let space () = printf "\n\n"
 
+    let () =
+      create 4.2;
+      create 4.28;
+      create 2.2;
+      create 7.18;
+      create (~-.2.00008);
+      space();
 
-  let () = 4.2 - 2.28
-  let () = 4.28 - 2.2
-  let () = 2.2 - 4.28
-  let () = 2.2 - (neg 4.28)
-  let () = 2.2 - 2.6
-  let () = (neg 2.2) - 2.46
-  let () = (neg 2.2) - (neg 2.46)
-  let () = 0.0000001 - 0.00000002
+      4.2 + 2.3;
+      4.2 + 2.98;
+      2.2 + 4.28;
+      2.2 + (neg 4.28);
+      (neg 2.2) + 4.28;
+      2.2 + 2.46;
+      0.0000001 + 0.00000002;
+      4.2 + 2.98;
+      space ();
 
-  let () = "4.2" -. "2.28"
-  let () = "4.28" -. "2.2"
-  let () = "2.2" -. "4.28"
-  let () = "2.2" -. "-4.28"
-  let () = "2.2" -. "2.6"
-  let () = "-2.2" -. "2.46"
-  let () = "-2.2" -. "-2.46"
-  let () = "0.0000001" -. "0.00000002"
+      4.2 - 2.28;
+      4.28 - 2.2;
+      2.2 - 4.28;
+      2.2 - (neg 4.28);
+      2.2 - 2.6;
+      (neg 2.2) - 2.46;
+      (neg 2.2) - (neg 2.46);
+      0.0000001 - 0.00000002;
+      space ();
 
+      1.0 * 2.5;
+      2.5 * 0.5;
+      4.2 * 3.4;
+      0.01 * 0.02;
+      1.0 * 0.5;
+      space ()
 
-  let () = 1.0 * 2.5
-  let () = 2.5 * 0.5
-  let () = 4.2 * 3.4
-  let () = 0.01 * 0.02
-  let () = 1.0 * 0.5
-  let () = 4.2 + 2.98
+  end
 
+  module Run = Main_test(struct type t = int end)
 
 
 end
