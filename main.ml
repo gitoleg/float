@@ -33,6 +33,18 @@ let enum_bits w =
     Seq.drop bits (b_len - w_len)
   else bits
 
+let msb w =
+  let bits = enum_bits w in
+  match Seq.findi bits ~f:(fun i x -> x) with
+  | None -> None
+  | Some (i,_) -> Some (Word.bitwidth w - i - 1)
+
+let lsb w =
+  let bits = enum_bits w in
+  match List.findi (Seq.to_list_rev bits) ~f:(fun i x -> x) with
+  | None -> None
+  | Some (i,_) -> Some i
+
 module Debug = struct
   let string_of_bits w =
     let bits = enum_bits w in
@@ -53,11 +65,7 @@ module Debug = struct
         else s @@ 0)
 end
 
-let msb w =
-  let bits = enum_bits w in
-  match Seq.findi bits ~f:(fun i x -> x) with
-  | None -> None
-  | Some (i,_) -> Some (Word.bitwidth w - i - 1)
+open Debug
 
 module Shift = struct
 
@@ -87,8 +95,6 @@ module Shift = struct
     { x with expn = x.expn + n; frac = rshift_frac radix x.frac n }
 
 end
-
-open Debug
 
 let word_of_sign = function
   | Pos -> Word.b0
@@ -191,13 +197,21 @@ let add_or_sub subtract a b = match a.value,b.value with
 let add = add_or_sub false
 let sub = add_or_sub true
 
-let align radix precision x =
-  let rec run x =
-    match msb x.frac with
-    | None -> x
-    | Some i when i < precision -> x
-    | _ -> run (Shift.right radix x 1) in
-  run x
+let align_right radix precision expn frac =
+  let rec run expn frac =
+    match msb frac with
+    | None -> expn,frac
+    | Some i when i < precision -> expn,frac
+    | _ -> run (expn + 1) (Shift.rshift_frac radix frac 1) in
+  run expn frac
+
+let align_left radix precision expn frac =
+  let rec run expn frac =
+    match lsb frac with
+    | None -> expn,frac
+    | Some i when i > precision -> expn,frac
+    | _ -> run (expn - 1) (Shift.lshift_frac radix frac 1) in
+  run expn frac
 
 let mul a b = match a.value,b.value with
   | Fin x, Fin y ->
@@ -209,23 +223,43 @@ let mul a b = match a.value,b.value with
     let xfrac = Word.concat zeros x.frac in
     let yfrac = Word.concat zeros y.frac in
     let frac = Word.(xfrac * yfrac) in
-    let x' = align a.radix precision {x with expn; frac} in
-    let expn, frac = x'.expn, x'.frac in
-
+    let expn, frac = align_right a.radix precision expn frac in
     let frac = Word.extract_exn ~hi:(precision - 1) frac in
     let value = norm a.radix {x with expn; frac} in
-
     {a with value = Fin value }
   | _ -> failwith "TODO"
 
+let div a b = match a.value,b.value with
+  | Fin x, Fin y ->
+
+    printf "x: %d, %d, %s\n" x.expn (wi x.frac) (string_of_bits x.frac);
+    printf "y: %d, %d, %s\n" y.expn (wi y.frac) (string_of_bits y.frac);
+
+    let x = minimize_exponent a.radix x in
+    let y = minimize_exponent a.radix y in
+
+    let precision = Word.bitwidth x.frac in
+    let expn = x.expn - y.expn in
+    let zeros = Word.zero (precision + 1) in
+    let xfrac = Word.concat x.frac zeros in
+    let yfrac = Word.concat y.frac zeros in
+
+    if Word.(xfrac < yfrac) then printf "aaaaaa\n";
+
+
+    let frac = Word.(xfrac / yfrac) in
+    printf "%s\n" (string_of_bits frac);
+
+    let expn, frac = align_right a.radix precision expn frac in
+    printf "%s\n\n" (string_of_bits frac);
+
+    let frac = Word.extract_exn ~hi:(precision - 1) frac in
+    let value = norm a.radix {x with expn; frac} in
+    {a with value = Fin value }
+  | _ -> failwith "TODO"
+
+
 module Front = struct
-
-  (* max exponent, precision  *)
-  let single = `Signle (127,24)
-  let double = `Double (1023,53)
-
-  let single_bits x = Word.of_int32 (Int32.bits_of_float x)
-  let double_bits x = Word.of_int64 (Int64.bits_of_float x)
 
   let single_of_float f =
     let w = Word.of_int32 (Int32.bits_of_float f) in
@@ -335,7 +369,7 @@ module Test_space = struct
     | Add -> add
     | Sub -> sub
     | Mul -> mul
-    | Div -> failwith "unimplemented"
+    | Div -> div
 
   let compare_str x y =
     if String.equal x y then "ok" else "POSSIBLE FAIL"
@@ -430,7 +464,11 @@ module Test_space = struct
       4.2 * 3.4;
       0.01 * 0.02;
       1.0 * 0.5;
-      space ()
+      space ();
+
+      2.0 / 0.5;
+      1.0 / 3.0
+
 
   end
 
