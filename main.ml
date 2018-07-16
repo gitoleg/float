@@ -197,6 +197,7 @@ let add_or_sub subtract a b = match a.value,b.value with
 let add = add_or_sub false
 let sub = add_or_sub true
 
+(* seems wrong here | None branch  *)
 let align_right radix precision expn frac =
   let rec run expn frac =
     match msb frac with
@@ -229,32 +230,53 @@ let mul a b = match a.value,b.value with
     {a with value = Fin value }
   | _ -> failwith "TODO"
 
+let set_bit x n =
+  let width = Word.bitwidth x in
+  let uno = Word.one width in
+  let n = Word.of_int ~width n in
+  let uno = Word.(uno lsl n) in
+  Word.(x lor uno)
+
 let div a b = match a.value,b.value with
   | Fin x, Fin y ->
-
     printf "x: %d, %d, %s\n" x.expn (wi x.frac) (string_of_bits x.frac);
     printf "y: %d, %d, %s\n" y.expn (wi y.frac) (string_of_bits y.frac);
-
     let x = minimize_exponent a.radix x in
     let y = minimize_exponent a.radix y in
-
-    let precision = Word.bitwidth x.frac in
     let expn = x.expn - y.expn in
-    let zeros = Word.zero (precision + 1) in
-    let xfrac = Word.concat x.frac zeros in
-    let yfrac = Word.concat y.frac zeros in
+    let expn, yfrac =
+      if Word.(x.frac < y.frac) then
+        expn - 1, Shift.rshift_frac a.radix y.frac 1
+      else expn, y.frac in
 
-    if Word.(xfrac < yfrac) then printf "aaaaaa\n";
+    printf "next e: %d\n" expn;
+    printf "next x: %d, %s\n" (wi x.frac) (string_of_bits x.frac);
+    printf "next y: %d, %s\n" (wi yfrac) (string_of_bits yfrac);
 
 
-    let frac = Word.(xfrac / yfrac) in
-    printf "%s\n" (string_of_bits frac);
+    let start_dividend,divisor = x.frac, yfrac in
+    let rec loop dividend res b =
+      (* let () = printf "loop:\n%s\n%s\n" *)
+      (*     (string_of_bits dividend) (string_of_bits divisor) in *)
+      let dividend, res =
+        if Word.(dividend >= divisor) then
+          let dividend = Word.(dividend - divisor) in
+          let res = set_bit res b in
+          dividend, res
+        else
+          dividend, res in
+      if b = 0 then res
+      else
+        let dividend = Shift.lshift_frac a.radix dividend 1 in
+        loop dividend res (b - 1) in
+    let precision = Word.bitwidth x.frac in
+    let frac = loop start_dividend (Word.zero precision) (precision - 1) in
+    printf "frac after loop: %s\n" (string_of_bits frac);
 
-    let expn, frac = align_right a.radix precision expn frac in
-    printf "%s\n\n" (string_of_bits frac);
+    let value = norm a.radix {x with frac; expn} in
 
-    let frac = Word.extract_exn ~hi:(precision - 1) frac in
-    let value = norm a.radix {x with expn; frac} in
+    printf "div expn: %d\n" value.expn;
+
     {a with value = Fin value }
   | _ -> failwith "TODO"
 
@@ -270,7 +292,7 @@ module Front = struct
     let expn = Word.to_int_exn expn' - bias in
     let frac = Word.extract_exn ~hi:22 w in
     let dexp = Word.bitwidth frac in
-    let expn = expn - dexp in
+    (* let expn = expn - dexp in *)
     let frac = Word.concat Word.b1 frac in
     mk ~radix:2 sign expn frac
 
@@ -291,9 +313,11 @@ module Front = struct
       let bias = 127 in
       let expn = bias + expn in
       let n = Word.bitwidth frac - 1 in
-      let expn = expn + n in
-      let frac = drop_hd frac in
+      (* let expn = expn + n in *)
+      let frac = drop_hd frac in (* in assumption that it's normal value *)
       let expn,frac = normalize_ieee bias expn frac in
+      printf "my result: %d %s\n" expn (string_of_bits frac);
+
       let expn = Word.of_int ~width:8 expn in
       let (^) = Word.concat in
       word_of_sign sign ^ expn ^ frac
@@ -321,12 +345,26 @@ module Front = struct
 
   let float_of_decimal t = match t.value with
     | Fin {sign;expn;frac} ->
+
+      printf "ALAAAAARM!!!: JUST DEBUG, REMOVE it ASAP\n";
+      let expn = expn - 7 in
+
       let expn = float_of_int expn in
       let frac = float_of_int @@ Word.to_int_exn frac in
       let r = frac *. (10.0 ** expn) in
       if sign = Neg then ~-. r
       else r
     | _ -> failwith "TODO"
+
+
+  let test str =
+    let x = decimal_of_string str in
+    match x.value with
+    | Fin x -> printf "construct %s: %d %d %s\n" str
+                 x.expn (wi x.frac) (string_of_bits x.frac)
+    | _ -> failwith "ooops"
+
+
 
 end
 
@@ -338,7 +376,7 @@ module Test_space = struct
     let bias = Word.of_int ~width:8 127 in
     let expn = Word.(expn - bias) in
     let frac = Word.extract_exn ~hi:22 w in
-    printf "ocaml: expn %d, frac %s\n" (wi expn) (string_of_bits frac)
+    printf "ocaml %f: unbiased expn %d, frac %s\n" x (wi expn) (string_of_bits frac)
 
   let word_of_float x =
     let x = Int32.bits_of_float x in
@@ -402,34 +440,34 @@ module Test_space = struct
     printf "dec: %g %s %g = %g(%g) %s\n" x (str_of_op op) y dec res
       (compare_str res_str dec_str)
 
+  let create x =
+    let bin x =
+      let y = Front.single_of_float x in
+      let z = Front.to_ieee_float_bits y in
+      let z = Word.signed z in
+      Int32.float_of_bits (Word.to_int32_exn z) in
+    let dec x =
+      let x = my_string_of_float x in
+      let v = Front.decimal_of_string x in
+      Front.float_of_decimal v in
+    let run x =
+      let res = sprintf "%g" x in
+      let bin = sprintf "%g" (bin x) in
+      let dec = sprintf "%g" (dec x) in
+      let cmp_bin = compare_str res bin in
+      let cmp_dec = compare_str res dec in
+      printf "make: from %s, bin %s, dec %s\n"
+        res cmp_bin cmp_dec in
+    run x
+
+  let neg x = ~-. x
+  let (+) = run Add
+  let (-) = run Sub
+  let ( * ) = run Mul
+  let ( / ) = run Div
+  let space () = printf "\n\n"
+
   module Main_test(F : T) = struct
-
-    let create x =
-      let bin x =
-        let y = Front.single_of_float x in
-        let z = Front.to_ieee_float_bits y in
-        let z = Word.signed z in
-        Int32.float_of_bits (Word.to_int32_exn z) in
-      let dec x =
-        let x = my_string_of_float x in
-        let v = Front.decimal_of_string x in
-        Front.float_of_decimal v in
-      let run x =
-        let res = sprintf "%g" x in
-        let bin = sprintf "%g" (bin x) in
-        let dec = sprintf "%g" (dec x) in
-        let cmp_bin = compare_str res bin in
-        let cmp_dec = compare_str res dec in
-        printf "make: from %s, bin %s, dec %s\n"
-          res cmp_bin cmp_dec in
-      run x
-
-    let neg x = ~-. x
-    let (+) = run Add
-    let (-) = run Sub
-    let ( * ) = run Mul
-    let ( / ) = run Div
-    let space () = printf "\n\n"
 
     let () =
       create 4.2;
@@ -472,7 +510,8 @@ module Test_space = struct
 
   end
 
-  module Run = Main_test(struct type t = int end)
+  (* module Run = Main_test(struct type t = int end) *)
 
+  let () = 1.0 / 3.0
 
 end
