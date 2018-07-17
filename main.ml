@@ -217,7 +217,6 @@ let add_or_sub subtract a b = match a.value,b.value with
 let add = add_or_sub false
 let sub = add_or_sub true
 
-(* seems wrong here | None branch  *)
 let align_right radix precision expn frac =
   let rec run expn frac =
     match msb frac with
@@ -226,13 +225,9 @@ let align_right radix precision expn frac =
     | _ -> run (expn + 1) (Shift.rshift_frac radix frac 1) in
   run expn frac
 
-let align_left radix precision expn frac =
-  let rec run expn frac =
-    match lsb frac with
-    | None -> expn,frac
-    | Some i when i > precision -> expn,frac
-    | _ -> run (expn - 1) (Shift.lshift_frac radix frac 1) in
-  run expn frac
+let xor_sign s s' =
+  let r = Word.(word_of_sign s lxor word_of_sign s') in
+  if Word.is_one r then Neg else Pos
 
 let mul a b = match a.value,b.value with
   | Fin x, Fin y ->
@@ -246,20 +241,29 @@ let mul a b = match a.value,b.value with
     let frac = Word.(xfrac * yfrac) in
     let expn, frac = align_right a.radix precision expn frac in
     let frac = Word.extract_exn ~hi:(precision - 1) frac in
-    let value = norm a.radix {x with expn; frac} in
+    let sign = xor_sign x.sign y.sign in
+    let value = norm a.radix {sign; expn; frac} in
     {a with value = Fin value }
   | _ -> failwith "TODO"
 
-let set_bit x n =
-  let width = Word.bitwidth x in
-  let uno = Word.one width in
-  let n = Word.of_int ~width n in
-  let uno = Word.(uno lsl n) in
-  Word.(x lor uno)
-
-let set_one w n =
-  let x = Word.zero w in
-  set_bit x n
+let divide radix min_degree start_dividend divisor =
+  let rec loop acc dividend degree =
+    let dividend, acc =
+      if Word.(dividend >= divisor) then
+        let res = Word.(dividend / divisor) in
+        let dividend = Word.(dividend - res * divisor) in
+        dividend, (res,degree) :: acc
+      else
+        let zero = Word.zero (Word.bitwidth dividend) in
+        let acc = (zero, degree) :: acc in
+        dividend, acc in
+    if degree > min_degree then
+      let dividend = if dividend < divisor then
+          Shift.lshift_frac radix dividend 1
+        else dividend in
+      loop acc dividend (degree - 1)
+    else acc in
+  loop [] start_dividend 0
 
 let div a b = match a.value,b.value with
   | Fin x, Fin y ->
@@ -271,65 +275,18 @@ let div a b = match a.value,b.value with
         expn - 1, Shift.rshift_frac a.radix y.frac 1
       else expn, y.frac in
     let precision = Word.bitwidth x.frac in
-    let start_dividend,divisor = x.frac, yfrac in
+    let dividend,divisor = x.frac, yfrac in
     let min_degree = min_exp_of_precision a.radix precision in
-    let rec loop acc dividend degree =
-      let dividend, acc =
-        if Word.(dividend >= divisor) then
-          let res = Word.(dividend / divisor) in
-          let dividend = Word.(dividend - res * divisor) in
-          dividend, (res,degree) :: acc
-        else
-          let acc = (Word.zero precision, degree) :: acc in
-          dividend, acc in
-      if min_degree - degree = 0 then List.rev acc
-      else
-        let dividend = if dividend < divisor then
-            Shift.lshift_frac a.radix dividend 1
-          else dividend in
-        loop acc dividend (degree - 1) in
-    let res = loop [] start_dividend 0 in
+    let res = divide a.radix min_degree dividend divisor in
     let frac = List.fold ~init:(Word.zero precision) res
         ~f:(fun r (q,d) ->
             let d' = d - min_degree  in
             Word.(r + Shift.lshift_frac a.radix q d')) in
     let expn = expn + min_degree in
-    let value = norm a.radix {x with frac; expn = expn} in
+    let sign = xor_sign x.sign y.sign in
+    let value = norm a.radix {sign; frac; expn = expn} in
     {a with value = Fin value }
   | _ -> failwith "TODO"
-
-
-let div_workable a b = match a.value,b.value with
-  | Fin x, Fin y ->
-    let x = minimize_exponent a.radix x in
-    let y = minimize_exponent a.radix y in
-    let expn = x.expn - y.expn in
-    let expn, yfrac =
-      if Word.(x.frac < y.frac) then
-        expn - 1, Shift.rshift_frac a.radix y.frac 1
-      else expn, y.frac in
-    let start_dividend,divisor = x.frac, yfrac in
-    let precision = Word.bitwidth x.frac in
-    let rec loop dividend res bit =
-      let dividend, res =
-        if Word.(dividend >= divisor) then
-          let dividend = Word.(dividend - divisor) in
-          let res = set_bit res bit in
-          dividend, res
-        else
-          dividend, res in
-      if bit = 0 then res
-      else
-        let dividend = if dividend < divisor then
-            Shift.lshift_frac a.radix dividend 1
-          else dividend in
-        loop dividend res (bit - 1) in
-    let frac = loop start_dividend (Word.zero precision) (precision - 1) in
-    let value = norm a.radix {x with frac; expn} in
-    {a with value = Fin value }
-  | _ -> failwith "TODO"
-
-
 
 module Front = struct
 
@@ -408,7 +365,6 @@ module Front = struct
       if sign = Neg then ~-. r
       else r
     | _ -> failwith "TODO"
-
 
   let test str =
     let x = decimal_of_string str in
@@ -555,6 +511,8 @@ module Test_space = struct
       4.2 * 3.4;
       0.01 * 0.02;
       1.0 * 0.5;
+      1.0 * (neg 0.5);
+      (neg 1.0) * (neg 0.5);
       space ();
 
       2.0 / 0.5;
@@ -563,7 +521,7 @@ module Test_space = struct
 
   end
 
-  (* module Run = Main_test(struct type t = int end) *)
+  module Run = Main_test(struct type t = int end)
 
   let () = 1.0 / 3.0
 
