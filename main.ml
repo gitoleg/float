@@ -63,6 +63,8 @@ module Debug = struct
         let s = sprintf "%s%s" acc a in
         if x then s @@ 1
         else s @@ 0)
+
+  let sb = string_of_bits
 end
 
 open Debug
@@ -82,11 +84,23 @@ module Shift = struct
       let k = Word.of_int ~width:(Word.bitwidth frac) (pow radix n) in
       Word.(frac * k)
 
+  let lshift_as_possible radix frac =
+    let width = Word.bitwidth frac in
+    let rec loop res =
+      let res' = lshift_frac radix res 1 in
+      if Word.is_zero (Word.extract_exn ~lo:width res') then loop res'
+      else res in
+    let x = Word.concat (Word.zero width) frac in
+    let y = loop x in
+    Word.extract_exn ~hi:(width - 1) y
+
+
   let rshift_frac radix frac n =
     if n = 0 then frac
     else
       let k = Word.of_int ~width:(Word.bitwidth frac) (pow radix n) in
-      Word.(frac / k)
+      if Word.is_zero k then k
+      else Word.(frac / k)
 
   let left radix x n =
     { x with expn = x.expn - n; frac = lshift_frac radix x.frac n }
@@ -139,6 +153,12 @@ let maximize_exponent radix x =
     let x = run {x with frac} in
     let frac = Word.extract_exn ~lo:width x.frac in
     {x with frac}
+
+let min_exp_of_precision radix precision =
+  let x = {sign=Pos; frac = Word.one precision; expn = 0} in
+  let y = minimize_exponent radix x in
+  y.expn
+
 
 let norm = minimize_exponent
 
@@ -237,10 +257,12 @@ let set_bit x n =
   let uno = Word.(uno lsl n) in
   Word.(x lor uno)
 
+let set_one w n =
+  let x = Word.zero w in
+  set_bit x n
+
 let div a b = match a.value,b.value with
   | Fin x, Fin y ->
-    printf "x: %d, %d, %s\n" x.expn (wi x.frac) (string_of_bits x.frac);
-    printf "y: %d, %d, %s\n" y.expn (wi y.frac) (string_of_bits y.frac);
     let x = minimize_exponent a.radix x in
     let y = minimize_exponent a.radix y in
     let expn = x.expn - y.expn in
@@ -248,37 +270,65 @@ let div a b = match a.value,b.value with
       if Word.(x.frac < y.frac) then
         expn - 1, Shift.rshift_frac a.radix y.frac 1
       else expn, y.frac in
-
-    printf "next e: %d\n" expn;
-    printf "next x: %d, %s\n" (wi x.frac) (string_of_bits x.frac);
-    printf "next y: %d, %s\n" (wi yfrac) (string_of_bits yfrac);
-
-
+    let precision = Word.bitwidth x.frac in
     let start_dividend,divisor = x.frac, yfrac in
-    let rec loop dividend res b =
-      (* let () = printf "loop:\n%s\n%s\n" *)
-      (*     (string_of_bits dividend) (string_of_bits divisor) in *)
+    let min_degree = min_exp_of_precision a.radix precision in
+    let rec loop acc dividend degree =
+      let dividend, acc =
+        if Word.(dividend >= divisor) then
+          let res = Word.(dividend / divisor) in
+          let dividend = Word.(dividend - res * divisor) in
+          dividend, (res,degree) :: acc
+        else
+          let acc = (Word.zero precision, degree) :: acc in
+          dividend, acc in
+      if min_degree - degree = 0 then List.rev acc
+      else
+        let dividend = if dividend < divisor then
+            Shift.lshift_frac a.radix dividend 1
+          else dividend in
+        loop acc dividend (degree - 1) in
+    let res = loop [] start_dividend 0 in
+    let frac = List.fold ~init:(Word.zero precision) res
+        ~f:(fun r (q,d) ->
+            let d' = d - min_degree  in
+            Word.(r + Shift.lshift_frac a.radix q d')) in
+    let expn = expn + min_degree in
+    let value = norm a.radix {x with frac; expn = expn} in
+    {a with value = Fin value }
+  | _ -> failwith "TODO"
+
+
+let div_workable a b = match a.value,b.value with
+  | Fin x, Fin y ->
+    let x = minimize_exponent a.radix x in
+    let y = minimize_exponent a.radix y in
+    let expn = x.expn - y.expn in
+    let expn, yfrac =
+      if Word.(x.frac < y.frac) then
+        expn - 1, Shift.rshift_frac a.radix y.frac 1
+      else expn, y.frac in
+    let start_dividend,divisor = x.frac, yfrac in
+    let precision = Word.bitwidth x.frac in
+    let rec loop dividend res bit =
       let dividend, res =
         if Word.(dividend >= divisor) then
           let dividend = Word.(dividend - divisor) in
-          let res = set_bit res b in
+          let res = set_bit res bit in
           dividend, res
         else
           dividend, res in
-      if b = 0 then res
+      if bit = 0 then res
       else
-        let dividend = Shift.lshift_frac a.radix dividend 1 in
-        loop dividend res (b - 1) in
-    let precision = Word.bitwidth x.frac in
+        let dividend = if dividend < divisor then
+            Shift.lshift_frac a.radix dividend 1
+          else dividend in
+        loop dividend res (bit - 1) in
     let frac = loop start_dividend (Word.zero precision) (precision - 1) in
-    printf "frac after loop: %s\n" (string_of_bits frac);
-
     let value = norm a.radix {x with frac; expn} in
-
-    printf "div expn: %d\n" value.expn;
-
     {a with value = Fin value }
   | _ -> failwith "TODO"
+
 
 
 module Front = struct
@@ -292,7 +342,7 @@ module Front = struct
     let expn = Word.to_int_exn expn' - bias in
     let frac = Word.extract_exn ~hi:22 w in
     let dexp = Word.bitwidth frac in
-    (* let expn = expn - dexp in *)
+    let expn = expn - dexp in
     let frac = Word.concat Word.b1 frac in
     mk ~radix:2 sign expn frac
 
@@ -313,11 +363,9 @@ module Front = struct
       let bias = 127 in
       let expn = bias + expn in
       let n = Word.bitwidth frac - 1 in
-      (* let expn = expn + n in *)
+      let expn = expn + n in
       let frac = drop_hd frac in (* in assumption that it's normal value *)
       let expn,frac = normalize_ieee bias expn frac in
-      printf "my result: %d %s\n" expn (string_of_bits frac);
-
       let expn = Word.of_int ~width:8 expn in
       let (^) = Word.concat in
       word_of_sign sign ^ expn ^ frac
@@ -328,6 +376,13 @@ module Front = struct
     | None -> x
     | Some p -> String.rstrip ~drop:(fun c -> Char.equal c '0') x
 
+  let rec truncate max_int expn x =
+    let y = int_of_string x in
+    if y <= max_int then expn, y
+    else
+      truncate max_int (expn + 1)
+        (String.subo ~len:(String.length x - 1) x)
+
   let decimal_of_string x =
     let x = truncate_zeros x in
     let is_neg = List.hd_exn (String.to_list x) = '-' in
@@ -337,18 +392,16 @@ module Front = struct
       else 0, p in
     let base = String.subo ~pos:start ~len:(point - start) x in
     let remd = String.subo ~pos:(point + 1) x in
-    let int_part = int_of_string (base ^ remd) in
+    let precision = 16 in
+    let max_int = int_of_float (2.0 ** float_of_int precision) in
     let expn = - (String.length remd) in
-    let frac = Word.of_int ~width:25 int_part in
+    let expn, int_part = truncate max_int expn (base ^ remd) in
+    let frac = Word.of_int ~width:precision int_part in
     let sign = if is_neg then Neg else Pos in
     mk ~radix:10 sign expn frac
 
   let float_of_decimal t = match t.value with
     | Fin {sign;expn;frac} ->
-
-      printf "ALAAAAARM!!!: JUST DEBUG, REMOVE it ASAP\n";
-      let expn = expn - 7 in
-
       let expn = float_of_int expn in
       let frac = float_of_int @@ Word.to_int_exn frac in
       let r = frac *. (10.0 ** expn) in
@@ -363,8 +416,6 @@ module Front = struct
     | Fin x -> printf "construct %s: %d %d %s\n" str
                  x.expn (wi x.frac) (string_of_bits x.frac)
     | _ -> failwith "ooops"
-
-
 
 end
 
@@ -431,7 +482,9 @@ module Test_space = struct
   let run op x y =
     let res = true_result x y op in
     let bin = ieee_single32 op x y in
+    let () = printf "\n" in
     let dec = decimal op x y in
+    let () = printf "\n" in
     let res_str = sprintf "%f\n" res in
     let bin_str = sprintf "%f\n" bin in
     let dec_str = sprintf "%f\n" dec in
@@ -513,5 +566,8 @@ module Test_space = struct
   (* module Run = Main_test(struct type t = int end) *)
 
   let () = 1.0 / 3.0
+
+  (* let () = 2.4 / 3.123131 *)
+  let () = 0.1313134 / 0.578465631
 
 end
