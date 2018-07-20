@@ -38,6 +38,7 @@ type loss =
   | ExactlyHalf
   | LessThanHalf
   | MoreThanHalf
+[@@deriving sexp]
 
 let enum_bits w =
   let bits = Word.enum_bits w BigEndian in
@@ -102,6 +103,8 @@ module Debug = struct
     | Fin {sign; expn; frac} ->
       sprintf "%s * %d * %d ^ %d" (str_of_sign sign) (wi frac) t.radix expn
     | Inf s -> sprintf "%sinf" (str_of_sign s)
+
+  let string_of_loss a = Sexp.to_string (sexp_of_loss a)
 
 end
 
@@ -500,6 +503,26 @@ module Front = struct
       let frac = Word.concat int_bit frac in
       mk ~radix:2 sign expn frac
 
+  let double_of_float f =
+    let w = Word.of_int64 (Int64.bits_of_float f) in
+    let sign = Word.extract_exn ~hi:63 ~lo:63 w in
+    let sign = if Word.is_zero sign then Pos else Neg in
+    let expn' = Word.extract_exn ~hi:62 ~lo:52 w in
+    let bias = 1023 in
+    let expn = Word.to_int_exn expn' - bias in
+    let frac = Word.extract_exn ~hi:51 w in
+    if all_ones expn' && Word.is_zero frac then
+      mk_inf ~radix:2 53 sign
+    else if all_ones expn' then
+      mk_nan ~radix:2 53
+    else
+      let dexp = Word.bitwidth frac in
+      let expn = expn - dexp in
+      let int_bit = if all_zeros expn' && all_zeros frac then Word.b0
+        else Word.b1 in
+      let frac = Word.concat int_bit frac in
+      mk ~radix:2 sign expn frac
+
   let normalize_ieee bias biased_expn frac =
     let min_expn = 1 in
     let max_expn = bias * 2 - 1 in
@@ -511,7 +534,7 @@ module Front = struct
       else expn, frac in
     run biased_expn frac
 
-  let to_ieee_float_bits t =
+  let to_single_float_bits t =
     let (^) = Word.concat in
     match t.value with
     | Fin x when t.radix = 2 ->
@@ -534,8 +557,31 @@ module Front = struct
       let frac = Word.zero 23 in
       word_of_sign sign^ expn ^ frac
 
+  let to_double_float_bits t =
+    let (^) = Word.concat in
+    match t.value with
+    | Fin x when t.radix = 2 ->
+      let {sign; expn; frac} = norm t.radix x in
+      let bias = 1023 in
+      let expn = bias + expn in
+      let n = Word.bitwidth frac - 1 in
+      let expn = expn + n in
+      let frac = drop_hd frac in (* in assumption that it's normal value *)
+      let expn,frac = normalize_ieee bias expn frac in
+      let expn = Word.of_int ~width:11 expn in
+      word_of_sign sign ^ expn ^ frac
+    | Fin x -> failwith "can't convert from radix other than 2"
+    | Nan (_,frac) ->
+      let expn = Word.ones 11 in
+      let frac = drop_hd frac in
+      word_of_sign Neg ^ expn ^ frac
+    | Inf sign ->
+      let expn = Word.ones 11 in
+      let frac = Word.zero 52 in
+      word_of_sign sign^ expn ^ frac
+
   let float_of_bin t =
-    let bits = to_ieee_float_bits t in
+    let bits = to_single_float_bits t in
     let bits = Word.signed bits |> Word.to_int32_exn in
     Int32.float_of_bits bits
 
@@ -580,7 +626,6 @@ module Front = struct
     | Fin {sign;expn;frac} ->
       let frac' = wdec frac in
       let len = String.length frac' in
-      (* printf "frac is %s, exp %d, len %d\n" frac' expn len; *)
       let frac' =
         if expn = 0 then frac'
         else if expn < 0 && expn < -len then
@@ -677,16 +722,17 @@ module Test_space = struct
     | Mul -> "*"
     | Div -> "/"
 
+  let noop' a = a  (* Int32.bits_of_float a |> Int32.float_of_bits *)
+
   let true'_result x y op =
-    let nop' a = Int32.bits_of_float a |> Int32.float_of_bits in
-    let x = nop' x in
-    let y = nop' y in
+    let x = noop' x in
+    let y = noop' y in
     let r = match op with
       | Add -> x +. y
       | Sub -> x -. y
       | Mul -> x *. y
       | Div -> x /. y in
-    nop' r
+    noop' r
 
   let f_of_op = function
     | Add -> add ~rm:Nearest_even
@@ -700,56 +746,69 @@ module Test_space = struct
   let my_string_of_float x = sprintf "%.15f" x
 
   let decimal op x y =
+    let x = noop' x in
+    let y = noop' y in
     let f1 = Front.decimal_of_string (my_string_of_float x) in
     let f2 = Front.decimal_of_string (my_string_of_float y) in
     let fr = (f_of_op op) f1 f2 in
-    Front.float_of_decimal fr
+    Front.float_of_decimal fr |> noop'
 
-  let ieee_single32 op x y =
+  let ieee_single op x y =
     let f1 = Front.single_of_float x in
     let f2 = Front.single_of_float y in
     let fr = (f_of_op op) f1 f2 in
-    let fb = Front.to_ieee_float_bits fr in
+    let fb = Front.to_single_float_bits fr in
     let fb = Word.signed fb in
     Int32.float_of_bits (Word.to_int32_exn fb)
 
-  let bits32_of_float x =
-    Word.of_int32 (Int32.bits_of_float x)
+  let ieee_double op x y =
+    let f1 = Front.double_of_float x in
+    let f2 = Front.double_of_float y in
+    let fr = (f_of_op op) f1 f2 in
+    let fb = Front.to_double_float_bits fr in
+    let fb = Word.signed fb in
+    Int64.float_of_bits (Word.to_int64_exn fb)
 
-  let bits64_of_float x =
-    Word.of_int64 (Int64.bits_of_float x)
+  let bits32_of_float x = Word.of_int32 (Int32.bits_of_float x)
+  let bits64_of_float x = Word.of_int64 (Int64.bits_of_float x)
 
   let run op x y =
     let res = true'_result x y op in
-    let bin = ieee_single32 op x y in
+    let bin = ieee_double op x y in
     let dec = decimal op x y in
-    let res_str = sprintf "%.5f" res in
-    let bin_str = sprintf "%.5f" bin in
-    let dec_str = sprintf "%.5f" dec in
-
+    let res_str = sprintf "%.6f" res in
+    let bin_str = sprintf "%.6f" bin in
+    let dec_str = sprintf "%.6f" dec in
     printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str
       (compare_str res_str bin_str);
     printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str
       (compare_str res_str dec_str)
 
   let create x =
-    let bin x =
+    let bin32 x =
       let y = Front.single_of_float x in
-      let z = Front.to_ieee_float_bits y in
+      let z = Front.to_single_float_bits y in
       let z = Word.signed z in
       Int32.float_of_bits (Word.to_int32_exn z) in
+    let bin64 x =
+      let y = Front.double_of_float x in
+      let z = Front.to_double_float_bits y in
+      let z = Word.signed z in
+      Int64.float_of_bits (Word.to_int64_exn z) in
     let dec x =
       let x = my_string_of_float x in
       let v = Front.decimal_of_string x in
       Front.float_of_decimal v in
     let run x =
       let res = sprintf "%g" x in
-      let bin = sprintf "%g" (bin x) in
+      let bin32 = sprintf "%g" (bin32 x) in
+      let bin64 = sprintf "%g" (bin64 x) in
       let dec = sprintf "%g" (dec x) in
-      let cmp_bin = compare_str res bin in
+      let cmp_bin32 = compare_str res bin32 in
+      let cmp_bin64 = compare_str res bin64 in
       let cmp_dec = compare_str res dec in
-      printf "make: from %s, bin %s, dec %s\n"
-        res cmp_bin cmp_dec in
+      printf "make: from %s, bin32 %s, bin64 %s, dec %s\n"
+        res cmp_bin32 cmp_bin64 cmp_dec in
     run x
 
   let neg x = ~-. x
@@ -807,6 +866,8 @@ module Test_space = struct
       324.32423 / 1.2
 
   end
+
+  (* let () = 4.2 * 3.4 *)
 
   module Run = Main_test(struct type t = unit end)
 
