@@ -40,6 +40,9 @@ type loss =
   | MoreThanHalf
 [@@deriving sexp]
 
+(* digit position from in range [0 .. radix - 1] relative to [radix/2] *)
+type digit = Middle | Less | More | Zero
+
 let enum_bits w =
   let bits = Word.enum_bits w BigEndian in
   let b_len = Seq.length bits in
@@ -123,9 +126,6 @@ let loss_digits radix loss =
     else loop acc loss' in
   loop [] loss
 
-(* digit position from 0 to radix - 1 relative to radix/2 *)
-type digit = Middle | Less | More | Zero
-
 let estimate_loss radix lost_frac n =
   let all_zeros ds =
     List.fold ds ~init:true
@@ -181,21 +181,12 @@ let pow ~radix n =
   if n = 0 then 1
   else run radix 1
 
-let bits = Word.bitwidth
-
-(* returns radix ^ n, TODO: think if we need it  *)
-let pow' radix n =
-  let radix = Word.of_int ~width:(bits n) radix in
-  let rec run r m =
-    if Word.(m < n) then run Word.(r * radix) (Word.succ m)
-    else r in
-  if Word.is_zero n then Word.one (bits n)
-  else run radix (Word.one (bits n))
+let bits_in = Word.bitwidth
 
 let lshift_frac radix frac n =
   if n = 0 then frac
   else
-    let k = Word.of_int ~width:(bits frac) (pow radix n) in
+    let k = Word.of_int ~width:(bits_in frac) (pow radix n) in
     Word.(frac * k)
 
 (* TODO: do we really need these conversions from int to word and
@@ -203,7 +194,7 @@ let lshift_frac radix frac n =
 let rshift_frac radix frac n =
   if n = 0 then frac, ExactlyZero
   else
-    let k = Word.of_int ~width:(bits frac) (pow radix n) in
+    let k = Word.of_int ~width:(bits_in frac) (pow radix n) in
     if Word.is_zero k then k, ExactlyZero
     else
       let result = Word.(frac / k) in
@@ -211,7 +202,7 @@ let rshift_frac radix frac n =
       result, estimate_loss radix Word.(frac - restored) n
 
 let lshift radix x n =
-  let n' = Word.(signed (of_int ~width:(bits x.frac) n)) in
+  let n' = Word.(signed (of_int ~width:(bits_in x.frac) n)) in
   let expn = Word.(signed (x.expn - n')) in
   { x with expn; frac = lshift_frac radix x.frac n }
 
@@ -238,7 +229,7 @@ let align_right ~radix ~precision expn frac =
     | Some i when i < precision -> n
     | _ -> run (n + 1) (fst (rshift_frac radix frac 1)) in
   let n = run 0 frac in
-  let n' = Word.of_int ~width:(bits expn) n in
+  let n' = Word.of_int ~width:(bits_in expn) n in
   let expn' = Word.(expn + n') in
   if Word.(expn' < expn) then None
   else
@@ -253,7 +244,7 @@ let min_exponent n = - (max_exponent n)
    OR if exponent reached a maximum of it's value *)
 let safe_align_right radix expn frac =
   let max_expn =
-    Word.of_int ~width:(bits expn) (max_exponent (bits expn)) in
+    Word.of_int ~width:(bits_in expn) (max_exponent (bits_in expn)) in
   let rec run expn x =
     if Word.(expn = max_expn) then expn, x
     else
@@ -265,9 +256,9 @@ let safe_align_right radix expn frac =
 
 let safe_align_left radix expn frac =
   let min_expn =
-    Word.of_int ~width:(bits expn) (min_exponent (bits expn)) in
+    Word.of_int ~width:(bits_in expn) (min_exponent (bits_in expn)) in
   let min_expn = Word.signed min_expn in
-  let width = bits frac in
+  let width = bits_in frac in
   let rec run expn x =
     if Word.(expn = min_expn) then expn, x
     else
@@ -311,11 +302,11 @@ let mk_nan ?(signaling=false) ~radix precs =
   let value = Nan (signaling, Word.one precs) in
   {radix; precs; value}
 
-let mk_zero radix precs expn_bits =
-  let expn = Word.zero expn_bits in
-  let frac = Word.zero precs in
-  let value = Fin {sign = Pos; expn; frac} in
-  {precs; radix; value}
+(* let mk_zero radix precs expn_bits = *)
+(*   let expn = Word.zero expn_bits in *)
+(*   let frac = Word.zero precs in *)
+(*   let value = Fin {sign = Pos; expn; frac} in *)
+(*   {precs; radix; value} *)
 
 let is_zero x = match x.value with
   | Fin x -> Word.is_zero x.frac
@@ -421,8 +412,7 @@ let add_or_sub rm subtract a b = match a.value,b.value with
     let is_subtract = Word.is_one Word.(s1 lxor (s2 lxor s3)) in
     let value =
       if is_subtract then sub rm a.radix x y
-      else
-        add rm a.precs a.radix x y in
+      else add rm a.precs a.radix x y in
     {a with value}
   | Nan _, _ | Inf _, _ -> a
   | _, Nan _ | _, Inf _ -> b
@@ -430,26 +420,44 @@ let add_or_sub rm subtract a b = match a.value,b.value with
 let add ?(rm=Nearest_even) = add_or_sub rm false
 let sub ?(rm=Nearest_even) = add_or_sub rm true
 
+let expn_sum x y =
+  let is_pos = Word.is_positive in
+  let is_neg = Word.is_negative in
+  let e = Word.(signed (x + y)) in
+  if is_pos x && is_pos y && Word.(e < x) then `Overflow_expn
+  else
+  if is_neg x && is_neg y && Word.(e > x) then `Overflow_expn
+  else `Nice e
+
+let expn_dif x y =
+  let is_pos = Word.is_positive in
+  let is_neg = Word.is_negative in
+  let e = Word.(signed (x - y)) in
+  if is_neg x && is_pos y && Word.(e > x) then `Underflow_expn
+  else
+  if is_pos x && is_neg y && Word.(e < x) then `Underflow_expn
+  else `Nice e
+
 let mul ?(rm=Nearest_even) a b = match a.value,b.value with
   | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
     let y = minimize_exponent a.radix y in
     let sign = xor_sign x.sign y.sign in
     let precision = Word.bitwidth x.frac in
-    let expn = Word.(x.expn + y.expn) in
-    if Word.(expn < x.expn) then {a with value = Inf sign}
-    else
-      let zeros = Word.zero (precision + 1) in
-      let xfrac = Word.concat zeros x.frac in
-      let yfrac = Word.concat zeros y.frac in
-      let frac = Word.(xfrac * yfrac) in
-      let value = match align_right a.radix precision expn frac with
+    let value = match expn_sum x.expn y.expn with
+      | `Overflow_expn -> Inf sign
+      | `Nice expn ->
+        let zeros = Word.zero (precision + 1) in
+        let xfrac = Word.concat zeros x.frac in
+        let yfrac = Word.concat zeros y.frac in
+        let frac = Word.(xfrac * yfrac) in
+        match align_right a.radix precision expn frac with
         | None -> Inf sign
         | Some (expn, frac, loss) ->
           let frac = Word.extract_exn ~hi:(precision - 1) frac in
           let frac = round rm sign frac loss in
           Fin (norm a.radix {sign; expn; frac}) in
-      {a with value }
+    { a with value }
   | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf _, _ when is_zero b -> mk_nan a.radix a.precs
@@ -471,8 +479,6 @@ let division_extra_digits = 3
     and a second is few next digits for rounding purposes. *)
 let divide radix min_degree start_dividend divisor =
   let set_digit r q pos =
-    (* TODO: remove of refactoring
-       let pos = Word.of_int ~width: *)
     Word.(r + lshift_frac radix q pos) in
   let set_digits digits =
     let init = Word.zero (Word.bitwidth divisor) in
@@ -510,31 +516,38 @@ let min_exp_of_precision radix exp_bits precision =
   Word.to_int_exn expn
 
 let div ?(rm=Nearest_even) a b =
+  let mk_zero expn_bits =
+    { sign=Pos; expn=Word.zero expn_bits; frac = Word.zero a.precs } in
+  let rec dif xfrac yfrac xexpn yexpn =
+    match expn_dif xexpn yexpn with
+    | `Underflow_expn -> None
+    | `Nice expn when Word.(xfrac >= yfrac) -> Some (expn, xfrac)
+    | `Nice expn ->
+      let xfrac = lshift_frac a.radix xfrac 1 in
+      let one = Word.one (bits_in expn) in
+      dif xfrac yfrac expn one in
   match a.value,b.value with
   | Fin x, Fin y when not (is_zero b) ->
     let x = minimize_exponent a.radix x in
     let y = minimize_exponent a.radix y in
     let sign = xor_sign x.sign y.sign in
-    let expn = Word.(signed (x.expn - y.expn)) in
     let extend = Word.zero a.precs in
     let xfrac = Word.concat extend x.frac in
     let yfrac = Word.concat extend y.frac in
-    let expn, xfrac = if Word.(xfrac < yfrac) then
-        Word.pred expn, lshift_frac a.radix xfrac 1
-      else expn, xfrac in
-    if Word.(signed expn > signed  x.expn) then
-      mk_zero a.radix a.precs (bits expn)
-    else
-      let expn = Word.signed expn in
-      let min_degree = min_exp_of_precision a.radix (bits expn) a.precs in
-      let frac,last = divide a.radix min_degree xfrac yfrac in
-      let loss = estimate_loss a.radix last division_extra_digits in
-      let frac = round rm sign frac loss in
-      let expn = Word.(expn + of_int ~width:(bits expn) min_degree) in
-      let expn,frac = safe_align_right a.radix expn frac in
-      let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
-      let expn = Word.signed expn in
-      {a with value = Fin {sign; frac; expn} }
+    let value = match dif xfrac yfrac x.expn y.expn with
+      | None -> mk_zero (bits_in x.expn)
+      | Some (expn, xfrac) ->
+        let expn = Word.signed expn in
+        let min_degree = min_exp_of_precision a.radix (bits_in expn) a.precs in
+        let frac,last = divide a.radix min_degree xfrac yfrac in
+        let loss = estimate_loss a.radix last division_extra_digits in
+        let frac = round rm sign frac loss in
+        let expn = Word.(expn + of_int ~width:(bits_in expn) min_degree) in
+        let expn,frac = safe_align_right a.radix expn frac in
+        let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
+        let expn = Word.signed expn in
+        {sign; frac; expn}  in
+    {a with value = Fin value }
   | Fin x, Fin y -> {a with value = Inf x.sign} (* div zero case  *)
   | Nan _, _ -> a
   | _, Nan _ -> b
@@ -947,7 +960,7 @@ module Test_space = struct
 
   end
 
-  (* module Run = Main_test(struct type t = unit end) *)
+  module Run = Main_test(struct type t = unit end)
 
 
   let test_nan = Word.of_int64 (Int64.bits_of_float Float.nan)
@@ -978,7 +991,7 @@ module Test_space = struct
     let r2 = Word.of_int64 (Int64.bits_of_float true_res) in
     printf "results:\n  ours: %s\n  caml: %s\n" (sb r1) (sb r2)
 
-  let () =
+  let a () =
     let str a = match a.value with
       | Fin x -> sprintf "%s %s [%d %d]"
                    (sb x.expn) (sb x.frac) (wi x.expn) (wi x.frac)
