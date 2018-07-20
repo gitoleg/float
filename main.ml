@@ -147,7 +147,7 @@ let loss_digits radix loss =
 (* digit position from 0 to radix - 1 relative to radix/2 *)
 type digit = Middle | Less | More | Zero
 
-let estimate_loss radix lost_frac =
+let estimate_loss radix lost_frac n =
   let all_zeros ds =
     List.fold ds ~init:true
       ~f:(fun all d -> if all then d = Zero else all) in
@@ -158,7 +158,13 @@ let estimate_loss radix lost_frac =
     else if Int.(x = 0) then Zero
     else if Int.( x < middle ) then Less
     else More in
-  loss_digits radix lost_frac |> List.map ~f:norm_digit |> function
+  let loss = loss_digits radix lost_frac |> List.map ~f:norm_digit in
+  let loss =
+    if List.length loss < n then
+      let zeros = List.init (n - List.length loss) (fun _ -> Zero) in
+      zeros @ loss
+    else loss in
+  match loss with
   | [] -> ExactlyZero
   | Zero :: [] -> ExactlyZero
   | Zero :: ds when all_zeros ds -> ExactlyZero
@@ -176,7 +182,7 @@ let rshift_frac radix frac n =
     else
       let result = Word.(frac / k) in
       let restored = Word.(result * k) in
-      result, estimate_loss radix Word.(frac - restored)
+      result, estimate_loss radix Word.(frac - restored) n
 
 let round rm sign frac loss =
   let dir = match rm, loss with
@@ -248,16 +254,14 @@ let safe_align_left radix expn frac =
     let frac = Word.extract_exn ~hi:(width - 1) frac in
     e,frac
 
-(* min exponent without bit loss, fraction shifted
-   as left as possible, i.e. it occupies more
-   significant bits *)
+(* min exponent without bit loss, fraction shifted as left
+   as possible, i.e. it occupies more significant bits *)
 let minimize_exponent radix x =
   let expn, frac = safe_align_left radix x.expn x.frac in
   {x with expn; frac}
 
-(* max exponent without bit loss, fraction shifted
-   as right as possible, i.e. it occupies less
-   significant bits *)
+(* max exponent without bit loss, fraction shifted as right
+   as possible, i.e. it occupies less significant bits *)
 let maximize_exponent radix x =
   let expn, frac = safe_align_right radix x.expn x.frac in
   {x with expn; frac}
@@ -405,6 +409,8 @@ let mul ?(rm=Nearest_even) a b = match a.value,b.value with
   | Inf _, _ -> a
   | _, Inf _ -> b
 
+(* extra digits that will be used for rounding  *)
+let division_extra_digits = 3
 
 (** [divide radix min_degree start_dividend divisor]
     performs division according to the next sum:
@@ -421,8 +427,7 @@ let divide radix min_degree start_dividend divisor =
     let init = Word.zero (Word.bitwidth divisor) in
     List.fold digits ~init
       ~f:(fun value (digit, degree) -> set_digit value digit degree) in
-  let more_digits = 3 in (* for rounding *)
-  let min_degree' = min_degree - more_digits in
+  let min_degree' = min_degree - division_extra_digits in
   let rec loop acc dividend degree =
     let dividend, acc =
       if Word.(dividend >= divisor) then
@@ -461,7 +466,7 @@ let div ?(rm=Nearest_even) a b =
       else expn, xfrac in
     let min_degree = min_exp_of_precision a.radix a.precs in
     let frac,last = divide a.radix min_degree xfrac yfrac in
-    let loss = estimate_loss a.radix last in
+    let loss = estimate_loss a.radix last division_extra_digits in
     let frac = round rm sign frac loss in
     let expn = expn + min_degree in
     let expn,frac = safe_align_right a.radix expn frac in
@@ -580,10 +585,15 @@ module Front = struct
       let frac = Word.zero 52 in
       word_of_sign sign^ expn ^ frac
 
-  let float_of_bin t =
+  let float_of_single t =
     let bits = to_single_float_bits t in
     let bits = Word.signed bits |> Word.to_int32_exn in
     Int32.float_of_bits bits
+
+  let float_of_double t =
+    let bits = to_double_float_bits t in
+    let bits = Word.signed bits |> Word.to_int64_exn in
+    Int64.float_of_bits bits
 
   let max_of_precision p = int_of_float (2.0 ** float_of_int p)
 
@@ -866,37 +876,17 @@ module Test_space = struct
       324.32423 / 1.2
 
   end
+  (* module Run = Main_test(struct type t = unit end) *)
 
-  (* let () = 4.2 * 3.4 *)
-
-  module Run = Main_test(struct type t = unit end)
-
-  let single_inf_bits s =
-    let expn = Word.ones 8 in
-    let frac = Word.zero 23 in
-    let (^) = Word.concat in
-    let sign = if s = 0 then Word.b0 else Word.b1 in
-    let bits = sign ^ expn ^ frac in
-    Word.signed bits
-
-  let inf = single_inf_bits 0
-
-  let a () =
-    let x = Front.single_of_float 1.0 in
-    let y = Front.single_of_float 0.0 in
+  let () =
+    let a = 21452525.043223423111 in
+    let b = 9.53534534111115 in
+    let x = Front.double_of_float a in
+    let y = Front.double_of_float b in
     let z = div x y in
-    let r = mul z y in
-    let r1 = Front.float_of_bin r in
-    printf "res %s, %f\n" (string_of_t r) r1
-
-  let neg_inf = single_inf_bits 1
-
-  let x s =
-    let inf = Int32.float_of_bits (Word.to_int32_exn inf) in
-    let r = Float.(0.0 * inf) in
-    let bits = Word.of_int32 (Int32.bits_of_float r) in
-    printf "%f\n%s\n" r (string_of_bits32 bits);
-    let bits = Word.of_int32 (Int32.bits_of_float Float.nan) in
-    printf "nan %s\n" (string_of_bits32 bits)
+    let true_res = a /. b in
+    let r1 = Front.to_double_float_bits z in
+    let r2 = Word.of_int64 (Int64.bits_of_float true_res) in
+    printf "results:\n  ours: %s\n  caml: %s\n" (sb r1) (sb r2)
 
 end
