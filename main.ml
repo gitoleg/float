@@ -876,9 +876,9 @@ module Test_space = struct
       324.32423 / 1.2
 
   end
-  (* module Run = Main_test(struct type t = unit end) *)
+  module Run = Main_test(struct type t = unit end)
 
-  let () =
+  let a () =
     let a = 21452525.043223423111 in
     let b = 9.53534534111115 in
     let x = Front.double_of_float a in
