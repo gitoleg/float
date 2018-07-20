@@ -822,13 +822,13 @@ module Test_space = struct
 
   let run op x y =
     let res = true'_result x y op in
-    (* let bin = ieee_double op x y in *)
+    let bin = ieee_double op x y in
     let dec = decimal op x y in
     let res_str = sprintf "%.6f" res in
-    (* let bin_str = sprintf "%.6f" bin in *)
+    let bin_str = sprintf "%.6f" bin in
     let dec_str = sprintf "%.6f" dec in
-    (* printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str *)
-    (*   (compare_str res_str bin_str); *)
+    printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str
+      (compare_str res_str bin_str);
     printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str
       (compare_str res_str dec_str)
 
