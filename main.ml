@@ -429,6 +429,7 @@ let expn_sum x y =
   if is_neg x && is_neg y && Word.(e > x) then `Overflow_expn
   else `Nice e
 
+(* TODO: why do we extending to precision + 1? *)
 let mul ?(rm=Nearest_even) a b = match a.value,b.value with
   | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
@@ -441,8 +442,8 @@ let mul ?(rm=Nearest_even) a b = match a.value,b.value with
         let zeros = Word.zero (precision + 1) in
         let xfrac = Word.concat zeros x.frac in
         let yfrac = Word.concat zeros y.frac in
-        let frac = Word.(xfrac * yfrac) in
-        match align_right a.radix precision expn frac with
+        let zfrac = Word.(xfrac * yfrac) in
+        match align_right a.radix precision expn zfrac with
         | None -> Inf sign
         | Some (expn, frac, loss) ->
           let frac = Word.extract_exn ~hi:(precision - 1) frac in
@@ -554,6 +555,52 @@ let div ?(rm=Nearest_even) a b =
   | _, Nan _ -> b
   | Inf _, _ -> a
   | _, Inf _ -> b
+
+let pow10 precs n =
+  let w = bits_in n in
+  let ten = Word.of_int ~width:w 10 in
+  let rec run x i =
+    if Word.(i < n) then
+      run Word.(x * ten) (Word.succ i)
+    else x in
+  if Word.is_zero n then Word.one precs
+  else run ten (Word.one w)
+
+let sqrt ?(rm=Nearest_even) a =
+  match a.value with
+  | Fin x ->
+    let x = minimize_exponent a.radix x in
+    let digits = digits_of_precision a.radix (bits_in x.expn) a.precs in
+    printf "input x: exp %d, frac %d (%s)\n" (wi x.expn) (wi x.frac) (sb x.frac);
+    let is_odd_expn = Word.(is_one (extract_exn ~hi:0 x.expn)) in
+    let frac = Word.(concat (zero a.precs) x.frac) in
+    let expn,frac,ds = if is_odd_expn then
+        let frac = lshift_frac a.radix frac 1 in
+        Word.(signed (pred x.expn)), frac, a.precs + 1
+      else x.expn, frac, a.precs in
+    printf "input x: exp %d\n" (wi x.expn);
+    let width = a.precs * 2 in
+    let init =
+      let n = Word.of_int ~width:(bits_in frac) digits in
+      let n = Word.(n / of_int ~width:(bits_in frac) 2) in
+      Word.(of_int ~width 6 * pow10 width n)  in
+    printf "init is %d\n" (wi init);
+    let two = Word.of_int ~width:(bits_in frac) 2 in
+    let max = 20 in
+    let rec run x0 n =
+      if n < max then
+        let x, _ = divide a.radix digits frac x0 in
+        let () = printf "x' %d\n" (wi x) in
+        let x = Word.((x0 + x) / two) in
+        let () = printf "x  %d\n\n" (wi x) in
+        run x (n + 1)
+      else x0 in
+    let frac = run init 0 in
+    let expn = Word.(expn - of_int ~width:(bits_in expn) digits) in
+    let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
+    {a with value = Fin {sign=Pos; expn; frac} }
+  | _ -> failwith "TODO"
+
 
 module Front = struct
 
@@ -707,6 +754,9 @@ module Front = struct
     let expn = Word.of_int ~width:10 expn in
     mk ~radix:10 sign expn frac
 
+  let my_string_of_float x = sprintf "%.15f" x
+  let decimal_of_float x = decimal_of_string (my_string_of_float x)
+
   let insert_point str before =
     List.foldi (String.to_list str) ~init:[]
       ~f:(fun i acc c ->
@@ -742,7 +792,6 @@ module Front = struct
         | Neg -> Float.neg_infinity
       end
     | Nan _ -> Float.(neg nan)
-
 
   let hexadecimal_of_string x =
     let x = truncate_zeros x in
@@ -957,7 +1006,34 @@ module Test_space = struct
 
   end
 
-  module Run = Main_test(struct type t = unit end)
+  (* module Run = Main_test(struct type t = unit end) *)
+
+  let test_sqrt () =
+    let open Caml in
+    let value = 42324500.0 in
+    let init = 6000.0 in
+    let max = 8 in
+    let rec run x i =
+      if i < max then
+        let x' = (x +. value /. x) /. 2.0 in
+        let () = printf "%f ---> %f\n" x x' in
+        run x' (i + 1)
+      else x in
+    let a = run init 0 in
+    printf "a is %f\n" a
+
+  let test_sqrt =
+    let x = 423245.0 in
+    (* let xb = Front.double_of_float x in *)
+    (* let yb = sqrt xb in *)
+    (* let zb = Front.float_of_double yb in *)
+    (* printf "binary sqrt: %f\n" zb; *)
+    let xd = Front.decimal_of_float x in
+    let yd = sqrt xd in
+    let zd = Front.float_of_decimal yd in
+    printf "decimal sqrt: %f\n" zd
+
+
 
   let test_nan = Word.of_int64 (Int64.bits_of_float Float.nan)
 
