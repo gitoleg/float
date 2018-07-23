@@ -95,13 +95,18 @@ module Front = struct
     match t.value with
     | Fin x when t.radix = 2 ->
       let {sign; expn; frac} = norm t.radix x in
+      let () = printf " in test: %d %d\n" (wi expn) (wi frac) in
+
       let bias = 1023 in
       let expn = Word.to_int_exn expn in
       let expn = bias + expn in
+
       let n = Word.bitwidth frac - 1 in
       let expn = expn + n in
       let frac = drop_hd frac in (* in assumption that it's normal value *)
+      printf "expn is %d\n" expn;
       let expn,frac = normalize_ieee bias expn frac in
+      printf "expn is %d\n" expn;
       let expn = Word.of_int ~width:11 expn in
       word_of_sign sign ^ expn ^ frac
     | Fin x -> failwith "can't convert from radix other than 2"
@@ -167,9 +172,12 @@ module Front = struct
 
   let float_of_decimal t = match t.value with
     | Fin {sign;expn;frac} ->
-      let expn = Word.to_int_exn expn in
+      let expn = Word.to_int_exn (Word.signed expn) in
       let frac = wdec frac in
       let len = String.length frac in
+
+      (* printf "float_of_decimal input: %d %s (%d len)\n" expn frac len; *)
+
       let frac =
         if expn = 0 then frac
         else if expn < 0 && expn < -len then
@@ -183,7 +191,9 @@ module Front = struct
           let frac = zeros ^ frac in
           insert_point frac expn
         else
-          insert_point frac expn in
+          let zeros = String.init expn ~f:(fun _ -> '0') in
+          let frac = frac ^ zeros in
+          insert_point frac (len + expn) in
       let frac = float_of_string frac in
       if sign = Neg then ~-. frac
       else frac
@@ -313,14 +323,14 @@ module Test_space = struct
   let run op x y =
     let res = true_result x y op in
     let bin = ieee_double op x y in
-    let dec = decimal op x y in
+    (* let dec = decimal op x y in *)
     let res_str = sprintf "%.6f" res in
     let bin_str = sprintf "%.6f" bin in
-    let dec_str = sprintf "%.6f" dec in
+    (* let dec_str = sprintf "%.6f" dec in *)
     printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str
-      (compare_str res_str bin_str);
-    printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str
-      (compare_str res_str dec_str)
+      (compare_str res_str bin_str)
+    (* printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str *)
+    (*   (compare_str res_str dec_str)  *)
 
   let create x =
     let bin32 x =
@@ -408,23 +418,33 @@ module Test_space = struct
 
   end
 
+  let test_div () =
+    let x = 211624.5 in
+    let y = 2.0 in
+    let xd = Front.decimal_of_float x in
+    let yd = Front.decimal_of_float y in
+    let zd = Front.float_of_decimal (div xd yd) in
+    printf "test delete : %f\n" zd
+
+  let () = 2.0 / 0.5
+
   (* module Run = Main_test(struct type t = unit end) *)
 
-  let test_sqrt () =
+  let test_OCAML_sqrt () =
     let open Caml in
     let value = 42324500.0 in
-    let init = 6000.0 in
-    let max = 8 in
-    let rec run x i =
+    let init = value /. 2.0 in
+    let max = 25 in
+    let rec run x0 i =
       if i < max then
-        let x' = (x +. value /. x) /. 2.0 in
-        let () = printf "%f ---> %f\n" x x' in
+        let x' = (x0 +. value /. x0) /. 2.0 in
+        let () = printf "%d: %f ---> %f\n" i x0 x' in
         run x' (i + 1)
-      else x in
+      else x0 in
     let a = run init 0 in
     printf "a is %f\n" a
 
-  let test_sqrt =
+  let test_sqrt () =
     let x = 423245.0 in
     (* let xb = Front.double_of_float x in *)
     (* let yb = sqrt xb in *)
@@ -434,53 +454,5 @@ module Test_space = struct
     let yd = sqrt xd in
     let zd = Front.float_of_decimal yd in
     printf "decimal sqrt: %f\n" zd
-
-
-
-  let test_nan = Word.of_int64 (Int64.bits_of_float Float.nan)
-
-  let a () =
-    let sign = "0" in
-    let expn = "00000000001" in
-    let data = String.init 51 (fun _ -> '0') in
-    let data = data ^ "1" in
-    let head = "0b" in
-    let tail = ":64u" in
-    let str = sign ^ expn ^ data  in
-    let w = Word.of_string (head ^ str ^ tail) |> Word.signed in
-    let f = Int64.float_of_bits (Word.to_int64_exn w) in
-    let f1 = f /. 2.0 in
-    let f1' = Word.of_int64 (Int64.bits_of_float f1) in
-    printf "%f\n%f\n%s\n%s\n" f f1 (sb f1') (sb test_nan)
-
-
-  let a () =
-    let a = 21452525.043223423111 in
-    let b = 9.53534534111115 in
-    let x = Front.double_of_float a in
-    let y = Front.double_of_float b in
-    let z = div x y in
-    let true_res = a /. b in
-    let r1 = Front.to_double_float_bits z in
-    let r2 = Word.of_int64 (Int64.bits_of_float true_res) in
-    printf "results:\n  ours: %s\n  caml: %s\n" (sb r1) (sb r2)
-
-  let a () =
-    let str a = match a.value with
-      | Fin x -> sprintf "%s %s [%d %d]"
-                   (sb x.expn) (sb x.frac) (wi x.expn) (wi x.frac)
-      | Inf s ->
-        let s = if s = Pos then "" else "-" in
-        s ^ "inf"
-      | _ -> "not a value" in
-    let mk exp frac =
-      let exp = Word.signed Word.(of_int ~width:3 exp) in
-      mk ~radix:10 Pos exp (Word.of_int ~width:4 frac) in
-    printf "max pos exp %d\n" (max_exponent 3);
-
-    let x = mk (-2) 14 in
-    let y = mk 3 15 in
-    let z = div x y in
-    printf " %s\n+%s\n=%s\n" (str x) (str y) (str z);
 
 end
