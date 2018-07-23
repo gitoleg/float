@@ -429,15 +429,6 @@ let expn_sum x y =
   if is_neg x && is_neg y && Word.(e > x) then `Overflow_expn
   else `Nice e
 
-let expn_dif x y =
-  let is_pos = Word.is_positive in
-  let is_neg = Word.is_negative in
-  let e = Word.(signed (x - y)) in
-  if is_neg x && is_pos y && Word.(e > x) then `Underflow_expn
-  else
-  if is_pos x && is_neg y && Word.(e < x) then `Underflow_expn
-  else `Nice e
-
 let mul ?(rm=Nearest_even) a b = match a.value,b.value with
   | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
@@ -468,7 +459,7 @@ let mul ?(rm=Nearest_even) a b = match a.value,b.value with
 (* extra digits that will be used for rounding  *)
 let division_extra_digits = 3
 
-(** [divide radix min_degree start_dividend divisor]
+(** [divide radix digits start_dividend divisor]
     performs division according to the next sum:
           n
       q = Σ  q_i * B ^ -i
@@ -477,14 +468,14 @@ let division_extra_digits = 3
     Returns two integers: first is a result of division,
     that could be represented in [abs min_degree] digits
     and a second is few next digits for rounding purposes. *)
-let divide radix min_degree start_dividend divisor =
+let divide radix digits start_dividend divisor =
   let set_digit r q pos =
     Word.(r + lshift_frac radix q pos) in
   let set_digits digits =
     let init = Word.zero (Word.bitwidth divisor) in
     List.fold digits ~init
       ~f:(fun value (digit, degree) -> set_digit value digit degree) in
-  let min_degree' = min_degree - division_extra_digits in
+  let digits' = digits + division_extra_digits in
   let rec loop acc dividend degree =
     let dividend, acc =
       if Word.(dividend >= divisor) then
@@ -495,25 +486,34 @@ let divide radix min_degree start_dividend divisor =
         let zero = Word.zero (Word.bitwidth dividend) in
         let acc = (zero, degree) :: acc in
         dividend, acc in
-    if degree > min_degree' then
+    if abs degree < digits' then
       let dividend = if dividend < divisor then
           lshift_frac radix dividend 1
         else dividend in
       loop acc dividend (degree - 1)
     else List.rev acc in
   let res = loop [] start_dividend 0 in
-  let res, last = List.split_n res (abs min_degree + 1) in
-  let res = List.map res ~f:(fun (d, deg) -> d, deg - min_degree) in
+  let res, last = List.split_n res (digits + 1) in
+  let res = List.map res ~f:(fun (d, deg) -> d, deg + digits) in
   let last = List.map (List.rev last)
-      ~f:(fun (d, deg) -> d, deg - min_degree') in
+      ~f:(fun (d, deg) -> d, deg + digits') in
   set_digits res, set_digits last
 
 (* returns a minimum possible exponent for [precision], i.e.
    how many digits could fit in [precision] bits *)
-let min_exp_of_precision radix exp_bits precision =
+let digits_of_precision radix exp_bits precision =
   let expn, _ =
     safe_align_left radix (Word.zero exp_bits) (Word.one precision) in
-  Word.to_int_exn expn
+  Word.to_int_exn expn |> abs
+
+let expn_dif x y =
+  let is_pos = Word.is_positive in
+  let is_neg = Word.is_negative in
+  let e = Word.(signed (x - y)) in
+  if is_neg x && is_pos y && Word.(e > x) then `Underflow_expn
+  else
+  if is_pos x && is_neg y && Word.(e < x) then `Underflow_expn
+  else `Nice e
 
 let div ?(rm=Nearest_even) a b =
   let mk_zero expn_bits =
@@ -527,7 +527,9 @@ let div ?(rm=Nearest_even) a b =
       let one = Word.one (bits_in expn) in
       dif xfrac yfrac expn one in
   match a.value,b.value with
-  | Fin x, Fin y when not (is_zero b) ->
+  | Fin x, Fin y when is_zero a && is_zero b -> mk_nan ~radix:a.radix a.precs
+  | Fin x, Fin y when is_zero b -> {a with value = Inf x.sign}
+  | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
     let y = minimize_exponent a.radix y in
     let sign = xor_sign x.sign y.sign in
@@ -538,17 +540,16 @@ let div ?(rm=Nearest_even) a b =
       | None -> mk_zero (bits_in x.expn)
       | Some (expn, xfrac) ->
         let expn = Word.signed expn in
-        let min_degree = min_exp_of_precision a.radix (bits_in expn) a.precs in
-        let frac,last = divide a.radix min_degree xfrac yfrac in
+        let digits = digits_of_precision a.radix (bits_in expn) a.precs in
+        let frac,last = divide a.radix digits xfrac yfrac in
         let loss = estimate_loss a.radix last division_extra_digits in
         let frac = round rm sign frac loss in
-        let expn = Word.(expn + of_int ~width:(bits_in expn) min_degree) in
+        let expn = Word.(expn - of_int ~width:(bits_in expn) digits) in
         let expn,frac = safe_align_right a.radix expn frac in
         let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
         let expn = Word.signed expn in
         {sign; frac; expn}  in
     {a with value = Fin value }
-  | Fin x, Fin y -> {a with value = Inf x.sign} (* div zero case  *)
   | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf _, _ -> a
@@ -740,7 +741,8 @@ module Front = struct
         | Pos -> Float.infinity
         | Neg -> Float.neg_infinity
       end
-    | _ -> failwith "TODO"
+    | Nan _ -> Float.(neg nan)
+
 
   let hexadecimal_of_string x =
     let x = truncate_zeros x in
@@ -815,17 +817,11 @@ module Test_space = struct
     | Mul -> "*"
     | Div -> "/"
 
-  let noop' a = a  (* Int32.bits_of_float a |> Int32.float_of_bits *)
-
-  let true'_result x y op =
-    let x = noop' x in
-    let y = noop' y in
-    let r = match op with
+  let true_result x y op = match op with
       | Add -> x +. y
       | Sub -> x -. y
       | Mul -> x *. y
-      | Div -> x /. y in
-    noop' r
+      | Div -> x /. y
 
   let f_of_op = function
     | Add -> add ~rm:Nearest_even
@@ -839,12 +835,10 @@ module Test_space = struct
   let my_string_of_float x = sprintf "%.15f" x
 
   let decimal op x y =
-    let x = noop' x in
-    let y = noop' y in
     let f1 = Front.decimal_of_string (my_string_of_float x) in
     let f2 = Front.decimal_of_string (my_string_of_float y) in
     let fr = (f_of_op op) f1 f2 in
-    Front.float_of_decimal fr |> noop'
+    Front.float_of_decimal fr
 
   let ieee_single op x y =
     let f1 = Front.single_of_float x in
@@ -866,7 +860,7 @@ module Test_space = struct
   let bits64_of_float x = Word.of_int64 (Int64.bits_of_float x)
 
   let run op x y =
-    let res = true'_result x y op in
+    let res = true_result x y op in
     let bin = ieee_double op x y in
     let dec = decimal op x y in
     let res_str = sprintf "%.6f" res in
@@ -956,12 +950,14 @@ module Test_space = struct
       2.4 / 3.123131;
       0.1313134 / 0.578465631;
       3.0 / 32.0;
-      324.32423 / 1.2
+      324.32423 / 1.2;
+      42.3 / 0.0;
+      0.0 / 0.0
+
 
   end
 
   module Run = Main_test(struct type t = unit end)
-
 
   let test_nan = Word.of_int64 (Int64.bits_of_float Float.nan)
 
