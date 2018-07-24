@@ -57,12 +57,6 @@ let msb w =
   | None -> None
   | Some (i,_) -> Some (Word.bitwidth w - i - 1)
 
-let lsb w =
-  let bits = enum_bits w in
-  match List.findi (Seq.to_list_rev bits) ~f:(fun i x -> x) with
-  | None -> None
-  | Some (i,_) -> Some i
-
 module Debug = struct
   let string_of_bits w =
     let bits = enum_bits w in
@@ -112,6 +106,11 @@ module Debug = struct
 
   let msb_exn x = Option.value_exn (msb x)
 
+  let lsb w =
+    let bits = enum_bits w in
+    match List.findi (Seq.to_list_rev bits) ~f:(fun i x -> x) with
+    | None -> None
+    | Some (i,_) -> Some i
 end
 
 open Debug
@@ -270,7 +269,9 @@ let safe_align_right radix expn frac =
       | y, ExactlyZero -> run (Word.succ expn) y
       | _ -> expn, x in
   if Word.is_zero frac then expn,frac
-  else run expn frac
+  else
+    let e,f = run expn frac in
+    Word.signed e, f
 
 (* TODO: check how comparison for min_expn is done *)
 let safe_align_left radix expn frac =
@@ -582,10 +583,10 @@ let div ?(rm=Nearest_even) a b =
   | Fin x, Fin y when is_zero b -> {a with value = Inf x.sign}
   | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
-    let y = maximize_exponent a.radix y in
+    let y = minimize_exponent a.radix y in
 
-    printf "  div input x: %d, %d\n" (wi x.expn) (wi x.frac);
-    printf "  div input y: %d, %d\n" (wi y.expn) (wi y.frac);
+    printf "  div input x: %s, %s\n" (wdec x.expn) (wdec x.frac);
+    printf "  div input y: %s, %s\n" (wdec y.expn) (wdec y.frac);
 
     let sign = xor_sign x.sign y.sign in
     let extend = Word.zero a.precs in
@@ -598,21 +599,26 @@ let div ?(rm=Nearest_even) a b =
       | Some (expn, xfrac) ->
         let expn = Word.signed expn in
         let digits = digits_of_precision a.radix (bits_in expn) a.precs in
-        printf "  divide %s %s = " (wdec xfrac) (wdec yfrac);
+
+        printf "divide %s / %s = " (wdec xfrac) (wdec yfrac);
+
         let frac,last = divide a.radix digits xfrac yfrac in
-        printf "%s\n" (wdec frac);
+        printf "%s(msb %d)\n" (wdec frac) (msb_exn frac);
+
         let loss = estimate_loss a.radix last division_extra_digits in
         let frac = round rm sign frac loss in
-        printf "  round: %s\n" (wdec frac);
-        let expn = Word.(expn - of_int ~width:(bits_in expn) digits) in
+        printf "expn is %d %d\n" (wi expn) digits;
+        let expn = Word.signed (Word.(expn - of_int ~width:(bits_in expn) digits)) in
+        printf "expn is %d\n" (wi expn);
         match align_right ~radix:a.radix ~precision:a.precs expn frac with
         | None -> mk_zero (bits_in x.expn) (* TODO: think here  *)
         | Some (expn,frac,loss) ->
         (* let expn,frac,loss = align_right ~radix:a.radix ~precs:a.precs expn frac in *)
         (* let expn,frac = safe_align_right a.radix expn frac in *)
-        printf "  align: %s (msb %d) (%d %d)\n" (wdec frac) (msb_exn frac) (bits_in frac) (a.precs);
+        (* printf "  align: %s (msb %d) (%d %d)\n" (wdec frac) (msb_exn frac) (bits_in frac) (a.precs); *)
         let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
         printf "  extract: %s\n" (wdec frac);
+        let frac = round rm sign frac loss in
         let expn = Word.signed expn in
         let value = norm a.radix  {sign; frac; expn} in
         printf "  div output:  %d, %d\n\n" (wi value.expn) (wi value.frac);
@@ -674,7 +680,7 @@ let sqrt ?(rm=Nearest_even) a =
         printf "sum (%s) (%s) = %s\n"
           (str_exn x0) (str_exn a1) (str_exn a2);
         let x' = div ~rm a2 two in
-        printf "%d: %s --> %s\n\n" n (str_exn x0) (str_exn x');
+        printf "###%d: %s --> %s\n\n" n (str_exn x0) (str_exn x');
         run x' (n + 1)
       else x0 in
     run init 0

@@ -454,20 +454,26 @@ module Test_space = struct
 
   let test_OCAML_sqrt () =
     let open Caml in
-    let value = 42324500.0 in
+    let value = 423245.0 in
     let init = value /. 2.0 in
     let max = 25 in
     let rec run x0 i =
       if i < max then
+        (* let a1 = value /. x0 in *)
+        (* let a2 = x0 +. a1 in *)
+        (* let a3 = a2 /. 2.0 in *)
         let x' = (x0 +. value /. x0) /. 2.0 in
-        let () = printf "%d: %f ---> %f\n" i x0 x' in
+        let () = printf "%d: %f ---> %.7f\n" i x0 x' in
+        (* let () = printf "  value / x0 %.7f\n" a1 in *)
+        (* let () = printf "  x0 + value / x0 %.7f\n" a2 in *)
+        (* let () = printf "  0.5(x0 + value / x0) %.7f\n" a3 in *)
         run x' (i + 1)
       else x0 in
     let a = run init 0 in
     printf "a is %f\n" a
 
   (* TODO: don't forget to try different seeds, e.g. a value itself *)
-  let test_sqrt  =
+  let test_sqrt =
     let x = 423245.0 in
     (* let xb = Front.double_of_float x in *)
     (* let yb = sqrt xb in *)
