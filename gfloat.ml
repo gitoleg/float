@@ -390,11 +390,11 @@ let balance radix x y =
     case max exponent achieved *)
 let common_ground ?(subtract=false) radix x y =
   let x,y = balance radix x y in
-    (* if Word.is_positive x.expn && Word.is_negative y.expn then *)
-    (*   minimize_exponent radix x, maximize_exponent radix y *)
-    (* else if Word.is_negative x.expn && Word.is_positive y.expn then *)
-    (*   maximize_exponent radix x, minimize_exponent radix y *)
-    (* else x, y in *)
+  (* if Word.is_positive x.expn && Word.is_negative y.expn then *)
+  (*   minimize_exponent radix x, maximize_exponent radix y *)
+  (* else if Word.is_negative x.expn && Word.is_positive y.expn then *)
+  (*   maximize_exponent radix x, minimize_exponent radix y *)
+  (* else x, y in *)
 
   let expn = Word.max x.expn y.expn in
   if Word.(x.expn > y.expn) then
@@ -613,16 +613,16 @@ let div ?(rm=Nearest_even) a b =
         match align_right ~radix:a.radix ~precision:a.precs expn frac with
         | None -> mk_zero (bits_in x.expn) (* TODO: think here  *)
         | Some (expn,frac,loss) ->
-        (* let expn,frac,loss = align_right ~radix:a.radix ~precs:a.precs expn frac in *)
-        (* let expn,frac = safe_align_right a.radix expn frac in *)
-        (* printf "  align: %s (msb %d) (%d %d)\n" (wdec frac) (msb_exn frac) (bits_in frac) (a.precs); *)
-        let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
-        printf "  extract: %s\n" (wdec frac);
-        let frac = round rm sign frac loss in
-        let expn = Word.signed expn in
-        let value = norm a.radix  {sign; frac; expn} in
-        printf "  div output:  %d, %d\n\n" (wi value.expn) (wi value.frac);
-        value  in
+          (* let expn,frac,loss = align_right ~radix:a.radix ~precs:a.precs expn frac in *)
+          (* let expn,frac = safe_align_right a.radix expn frac in *)
+          (* printf "  align: %s (msb %d) (%d %d)\n" (wdec frac) (msb_exn frac) (bits_in frac) (a.precs); *)
+          let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
+          printf "  extract: %s\n" (wdec frac);
+          let frac = round rm sign frac loss in
+          let expn = Word.signed expn in
+          let value = norm a.radix  {sign; frac; expn} in
+          printf "  div output:  %d, %d\n\n" (wi value.expn) (wi value.frac);
+          value  in
     {a with value = Fin value }
   | Nan _, _ -> a
   | _, Nan _ -> b
@@ -657,15 +657,23 @@ let str_exn a =
   sprintf "expn %d, frac %d" (wi e) (wi f)
 
 let sqrt ?(rm=Nearest_even) a =
+  let truncate x = match x.value with
+    | Fin {sign; expn; frac} ->
+      begin
+        match align_right ~radix:a.radix ~precision:a.precs expn frac with
+        | None -> failwith "todo"
+        | Some (expn, frac, loss) ->
+          let frac = round rm sign frac loss in
+          let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
+          let value = Fin {sign; expn; frac} in
+          { a with value }
+      end
+    | _ -> x in
   match a.value with
   | Fin x ->
     let x = minimize_exponent a.radix x in
-    let is_odd_expn = Word.(is_one (extract_exn ~hi:0 x.expn)) in
+    let expn,frac = x.expn, x.frac in
     let frac = Word.(concat (zero a.precs) x.frac) in
-    let expn,frac = if is_odd_expn then
-        let frac = lshift_frac a.radix frac 1 in
-        Word.(signed (pred x.expn)), frac
-      else x.expn, frac in
     let s =
       mk ~radix:a.radix Pos expn frac in
     let two =
@@ -683,5 +691,5 @@ let sqrt ?(rm=Nearest_even) a =
         printf "###%d: %s --> %s\n\n" n (str_exn x0) (str_exn x');
         run x' (n + 1)
       else x0 in
-    run init 0
+    truncate (run init 0)
   | _ -> failwith "TODO"

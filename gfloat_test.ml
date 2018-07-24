@@ -178,6 +178,8 @@ module Front = struct
 
   let float_of_decimal t = match t.value with
     | Fin {sign;expn;frac} ->
+      printf "frac is %s (%d)\n" (wdec frac) (bits_in frac);
+
       let expn = Word.to_int_exn (Word.signed expn) in
       let frac = wdec frac in
       let len = String.length frac in
@@ -258,8 +260,8 @@ module Test_space = struct
     let bias = Word.of_int ~width:8 127 in
     let expn = Word.(expn - bias) in
     let frac = Word.extract_exn ~hi:22 w in
-    printf "ocaml %f: unbiased expn %d, frac %s, total %s\n"
-      x (wi expn) (string_of_bits frac) (string_of_bits32 w)
+    printf "ocaml %f: unbiased expn %d, frac %s %s, total %s\n"
+      x (wi expn) (wdec frac) (string_of_bits frac) (string_of_bits32 w)
 
   let deconstruct64 x =
     let w = Word.of_int64 (Int64.bits_of_float x) in
@@ -475,10 +477,10 @@ module Test_space = struct
   (* TODO: don't forget to try different seeds, e.g. a value itself *)
   let test_sqrt =
     let x = 423245.0 in
-    (* let xb = Front.double_of_float x in *)
-    (* let yb = sqrt xb in *)
-    (* let zb = Front.float_of_double yb in *)
-    (* printf "binary sqrt: %f\n" zb; *)
+    let xb = Front.single_of_float x in
+    let yb = sqrt xb in
+    let zb = Front.float_of_single yb in
+    printf "binary sqrt: %f (%f)\n" zb (Float.sqrt x);
     let xd = Front.decimal_of_float x in
     let yd = sqrt xd in
     let zd = Front.float_of_decimal yd in
