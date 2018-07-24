@@ -104,6 +104,7 @@ module Front = struct
     let (^) = Word.concat in
     match t.value with
     | Fin x when t.radix = 2 ->
+      printf "frac is %s (%d)\n" (wdec x.frac) (bits_in x.frac);
       let {sign; expn; frac} = norm t.radix x in
       let bias = 1023 in
       let expn = Word.to_int_exn expn in
@@ -178,8 +179,6 @@ module Front = struct
 
   let float_of_decimal t = match t.value with
     | Fin {sign;expn;frac} ->
-      printf "frac is %s (%d)\n" (wdec frac) (bits_in frac);
-
       let expn = Word.to_int_exn (Word.signed expn) in
       let frac = wdec frac in
       let len = String.length frac in
@@ -336,13 +335,13 @@ module Test_space = struct
 
   let run op x y =
     let res = true_result x y op in
-    (* let bin = ieee_double op x y in *)
+    let bin = ieee_double op x y in
     let dec = decimal op x y in
     let res_str = sprintf "%.6f" res in
-    (* let bin_str = sprintf "%.6f" bin in *)
+    let bin_str = sprintf "%.6f" bin in
     let dec_str = sprintf "%.6f" dec in
-    (* printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str *)
-    (*   (compare_str res_str bin_str); *)
+    printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str
+      (compare_str res_str bin_str);
     printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str
       (compare_str res_str dec_str)
 
@@ -477,9 +476,10 @@ module Test_space = struct
   (* TODO: don't forget to try different seeds, e.g. a value itself *)
   let test_sqrt =
     let x = 423245.0 in
-    let xb = Front.single_of_float x in
+    let () = create x in
+    let xb = Front.double_of_float x in
     let yb = sqrt xb in
-    let zb = Front.float_of_single yb in
+    let zb = Front.float_of_double yb in
     printf "binary sqrt: %f (%f)\n" zb (Float.sqrt x);
     let xd = Front.decimal_of_float x in
     let yd = sqrt xd in

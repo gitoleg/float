@@ -1,5 +1,4 @@
 open Core_kernel
-open Format
 open Bap.Std
 
 let ws = Word.to_string
@@ -184,12 +183,6 @@ let pow ~radix n =
 
 let bits_in = Word.bitwidth
 
-let lshift_frac radix frac n =
-  if n = 0 then frac
-  else
-    let k = Word.of_int ~width:(bits_in frac) (pow radix n) in
-    Word.(frac * k)
-
 (* return None if number doesn't fit into [precs]  *)
 let pow' ~radix ~precs n =
   let radix = Word.of_int ~width:precs radix in
@@ -201,6 +194,14 @@ let pow' ~radix ~precs n =
     else Some r in
   if n = 0 then Some (Word.one precs)
   else run radix 1
+
+let lshift_frac radix frac n =
+  if n = 0 then frac
+  else
+    match pow' ~radix ~precs:(bits_in frac) n with
+    | None -> Word.zero (bits_in frac)
+    | Some k -> Word.(frac * k)
+
 
 (* TODO: do we really need these conversions from int to word and
    back for n?? *)
@@ -415,13 +416,13 @@ let combine_loss more less =
 
 
 let add rm radix x y =
-  printf "add input: %d, %d + %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac);
+  (* printf "add input: %d, %d + %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac); *)
   (* let x = minimize_exponent radix x in *)
   (* let y = minimize_exponent radix y in *)
-  printf "add minim: %d, %d + %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac);
+  (* printf "add minim: %d, %d + %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac); *)
   let x,y,loss = common_ground radix x y in
 
-  printf "add common: %d, %d; %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac);
+  (* printf "add common: %d, %d; %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac); *)
 
   let frac = Word.(x.frac + y.frac) in
   let result =
@@ -521,8 +522,7 @@ let division_extra_digits = 3
     and a second is few next digits for rounding purposes.
     Precondition: dividend > divisor *)
 let divide radix digits start_dividend divisor =
-  let set_digit r q pos =
-    Word.(r + lshift_frac radix q pos) in
+  let set_digit r q pos = Word.(r + lshift_frac radix q pos) in
   let set_digits digits =
     let init = Word.zero (Word.bitwidth divisor) in
     List.fold digits ~init
@@ -583,7 +583,7 @@ let div ?(rm=Nearest_even) a b =
   | Fin x, Fin y when is_zero b -> {a with value = Inf x.sign}
   | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
-    let y = minimize_exponent a.radix y in
+    let y = maximize_exponent a.radix y in
 
     printf "  div input x: %s, %s\n" (wdec x.expn) (wdec x.frac);
     printf "  div input y: %s, %s\n" (wdec y.expn) (wdec y.frac);
@@ -600,10 +600,13 @@ let div ?(rm=Nearest_even) a b =
         let expn = Word.signed expn in
         let digits = digits_of_precision a.radix (bits_in expn) a.precs in
 
-        printf "divide %s / %s = " (wdec xfrac) (wdec yfrac);
+        printf "divide %s(%d) / %s(%d) = "
+          (sb xfrac) (msb_exn xfrac) (sb yfrac) (msb_exn yfrac);
 
         let frac,last = divide a.radix digits xfrac yfrac in
-        printf "%s(msb %d)\n" (wdec frac) (msb_exn frac);
+        printf "%s\n%!" (wdec frac);
+
+        printf "msb %d/%d\n" (msb_exn frac) (bits_in frac);
 
         let loss = estimate_loss a.radix last division_extra_digits in
         let frac = round rm sign frac loss in
@@ -621,7 +624,7 @@ let div ?(rm=Nearest_even) a b =
           let frac = round rm sign frac loss in
           let expn = Word.signed expn in
           let value = norm a.radix  {sign; frac; expn} in
-          printf "  div output:  %d, %d\n\n" (wi value.expn) (wi value.frac);
+          (* printf "  div output:  %d, %d\n\n" (wi value.expn) (wi value.frac); *)
           value  in
     {a with value = Fin value }
   | Nan _, _ -> a
@@ -674,21 +677,22 @@ let sqrt ?(rm=Nearest_even) a =
     let x = minimize_exponent a.radix x in
     let expn,frac = x.expn, x.frac in
     let frac = Word.(concat (zero a.precs) x.frac) in
-    let s =
-      mk ~radix:a.radix Pos expn frac in
+    let s = mk ~radix:a.radix Pos expn frac in
     let two =
       let expn = Word.zero (bits_in expn) in
       mk ~radix:a.radix Pos expn (Word.of_int ~width:(bits_in frac) 2) in
+    let () = printf "op 1 \n%!" in
     let init = div ~rm s two in
+    let () = printf "op 1 finished\n%!" in
     let max = 15 in
     let rec run x0 n =
       if n < max then
         let a1 = div ~rm s x0 in
         let a2 = add ~rm x0 a1 in
-        printf "sum (%s) (%s) = %s\n"
-          (str_exn x0) (str_exn a1) (str_exn a2);
+        (* printf "sum (%s) (%s) = %s\n" *)
+        (*   (str_exn x0) (str_exn a1) (str_exn a2); *)
         let x' = div ~rm a2 two in
-        printf "###%d: %s --> %s\n\n" n (str_exn x0) (str_exn x');
+        (* printf "###%d: %s --> %s\n\n" n (str_exn x0) (str_exn x'); *)
         run x' (n + 1)
       else x0 in
     truncate (run init 0)
