@@ -181,7 +181,6 @@ module Front = struct
       let expn = Word.to_int_exn (Word.signed expn) in
       let frac = wdec frac in
       let len = String.length frac in
-      (* printf "float_of_decimal input: %d %s (%d len)\n" expn frac len; *)
       let frac =
         if expn = 0 then frac
         else if expn < 0 && expn < -len then
@@ -335,15 +334,15 @@ module Test_space = struct
 
   let run op x y =
     let res = true_result x y op in
-    let bin = ieee_double op x y in
-    (* let dec = decimal op x y in *)
+    (* let bin = ieee_double op x y in *)
+    let dec = decimal op x y in
     let res_str = sprintf "%.6f" res in
-    let bin_str = sprintf "%.6f" bin in
-    (* let dec_str = sprintf "%.6f" dec in *)
-    printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str
-      (compare_str res_str bin_str)
-    (* printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str *)
-    (*   (compare_str res_str dec_str)  *)
+    (* let bin_str = sprintf "%.6f" bin in *)
+    let dec_str = sprintf "%.6f" dec in
+    (* printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str *)
+    (*   (compare_str res_str bin_str); *)
+    printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str
+      (compare_str res_str dec_str)
 
   let create x =
     let bin32 x =
@@ -428,22 +427,30 @@ module Test_space = struct
       42.3 / 0.0;
       0.0 / 0.0
 
-
   end
 
-  (* let () = deconstruct64 4.0 *)
+  (* module Run = Main_test(struct type t = unit end) *)
 
-  let test_div () =
-    let x = 211624.5 in
-    let y = 2.0 in
-    let xd = Front.decimal_of_float x in
-    let yd = Front.decimal_of_float y in
-    let zd = Front.float_of_decimal (div xd yd) in
-    printf "test delete : %f\n" zd
+  (* div input x: -9, 2645300248180065 *)
+  (* div input y: 0, 2 *)
+  (* div output:  -10, 4219301986159333 *)
 
-  let () = 2.0 / 0.5
+  let a () =
+    let mk_expn x = Word.signed (Word.of_int ~width:10 x) in
+    let mk_frac x = Word.of_int ~width:52 x in
+    let a1 = mk ~radix:10 Pos (mk_expn (-9)) (mk_frac 2645300248180065) in
+    let a2 = mk ~radix:10 Pos (mk_expn 0) (mk_frac 2) in
+    let a = div a1 a2 in
+    let r = Front.float_of_decimal a in
+    printf "my res %.6f\n" r
 
-  module Run = Main_test(struct type t = unit end)
+  let a () =
+    let a1 = Front.decimal_of_float 42324500.0 in
+    let a2 = Front.decimal_of_float 2.0 in
+    let a3 = div a1 a2 in
+    let a4 = add a3 a2 in
+    let r = Front.float_of_decimal a4 in
+    printf "%f\n" r
 
   let test_OCAML_sqrt () =
     let open Caml in
@@ -459,7 +466,8 @@ module Test_space = struct
     let a = run init 0 in
     printf "a is %f\n" a
 
-  let test_sqrt () =
+  (* TODO: don't forget to try different seeds, e.g. a value itself *)
+  let test_sqrt  =
     let x = 423245.0 in
     (* let xb = Front.double_of_float x in *)
     (* let yb = sqrt xb in *)
@@ -468,6 +476,6 @@ module Test_space = struct
     let xd = Front.decimal_of_float x in
     let yd = sqrt xd in
     let zd = Front.float_of_decimal yd in
-    printf "decimal sqrt: %f\n" zd
+    printf "decimal sqrt: %f (%f)\n" zd (Float.sqrt x)
 
 end

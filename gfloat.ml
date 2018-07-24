@@ -110,6 +110,8 @@ module Debug = struct
 
   let string_of_loss a = Sexp.to_string (sexp_of_loss a)
 
+  let msb_exn x = Option.value_exn (msb x)
+
 end
 
 open Debug
@@ -189,17 +191,31 @@ let lshift_frac radix frac n =
     let k = Word.of_int ~width:(bits_in frac) (pow radix n) in
     Word.(frac * k)
 
+(* return None if number doesn't fit into [precs]  *)
+let pow' ~radix ~precs n =
+  let radix = Word.of_int ~width:precs radix in
+  let rec run r m =
+    if m < n then
+      let r' = Word.(r * radix) in
+      if Word.(r' < r) then None
+      else run r' (m + 1)
+    else Some r in
+  if n = 0 then Some (Word.one precs)
+  else run radix 1
+
 (* TODO: do we really need these conversions from int to word and
    back for n?? *)
 let rshift_frac radix frac n =
   if n = 0 then frac, ExactlyZero
   else
-    let k = Word.of_int ~width:(bits_in frac) (pow radix n) in
-    if Word.is_zero k then k, ExactlyZero
-    else
-      let result = Word.(frac / k) in
-      let restored = Word.(result * k) in
-      result, estimate_loss radix Word.(frac - restored) n
+    match pow' ~radix ~precs:(bits_in frac) n with
+    | None -> Word.zero (bits_in frac), MoreThanHalf
+    | Some k ->
+      if Word.is_zero k then k, ExactlyZero
+      else
+        let result = Word.(frac / k) in
+        let restored = Word.(result * k) in
+        result, estimate_loss radix Word.(frac - restored) n
 
 let lshift radix x n =
   let n' = Word.(signed (of_int ~width:(bits_in x.frac) n)) in
@@ -209,7 +225,7 @@ let lshift radix x n =
 let rshift radix x n =
   let n' = Word.signed n in
   let n = Word.to_int_exn n' in
-  let frac,loss = rshift_frac radix x.frac n in
+  let frac, loss = rshift_frac radix x.frac n in
   let expn = Word.signed Word.(x.expn + n') in
   { x with expn; frac }, loss
 
@@ -237,7 +253,7 @@ let align_right ~radix ~precision expn frac =
     Some (expn', res, loss)
 
 (* maximum possible exponent that fits in [n] signed bits *)
-let max_exponent n = pow ~radix:2 n - 1
+let max_exponent n = pow ~radix:2 (n - 1) - 1
 let min_exponent n = - (max_exponent n)
 
 (* the same as [align_right] above, but stops in case of bits loss
@@ -263,7 +279,8 @@ let safe_align_left radix expn frac =
   let min_expn = Word.signed min_expn in
   let width = bits_in frac in
   let rec run expn x =
-    if Word.(expn = min_expn) then expn, x
+    if Word.(expn = min_expn) then
+      expn, x
     else
       let y = lshift_frac radix x 1 in
       let z = Word.extract_exn ~lo:width y in
@@ -290,7 +307,7 @@ let maximize_exponent radix x =
   let expn, frac = safe_align_right radix x.expn x.frac in
   { x with expn; frac }
 
-let norm = minimize_exponent
+let norm = maximize_exponent
 
 let mk ~radix sign expn frac =
   let expn = Word.signed expn in
@@ -344,11 +361,40 @@ let invert_loss = function
   | MoreThanHalf -> LessThanHalf
   | x -> x
 
+
+
+let estimate_spot radix x =
+  let left  = minimize_exponent radix x in
+  let right = maximize_exponent radix x in
+  if Word.(left.expn <> x.expn && right.expn <> x.expn) then `Both
+  else if Word.(left.expn <> x.expn) then `Left
+  else if Word.(right.expn <> x.expn) then `Right
+  else `Nope
+
+let balance radix x y =
+  match estimate_spot radix x, estimate_spot radix y with
+  | `Left,  _ when Word.(x.expn > y.expn) ->
+    minimize_exponent radix x, y
+  | `Right, _ when Word.(x.expn < y.expn) ->
+    maximize_exponent radix x, y
+  | _, `Left when Word.(x.expn < y.expn) ->
+    x, minimize_exponent radix y
+  | _, `Right when Word.(x.expn > y.expn) ->
+    x, maximize_exponent radix y
+  | _ -> minimize_exponent radix x, minimize_exponent radix y
+
 (*  TODO:
     is it guaranteed that common_ground returns a correct values,
     i.e. with an equal exponent. Because safe_align stops in
     case max exponent achieved *)
 let common_ground ?(subtract=false) radix x y =
+  let x,y = balance radix x y in
+    (* if Word.is_positive x.expn && Word.is_negative y.expn then *)
+    (*   minimize_exponent radix x, maximize_exponent radix y *)
+    (* else if Word.is_negative x.expn && Word.is_positive y.expn then *)
+    (*   maximize_exponent radix x, minimize_exponent radix y *)
+    (* else x, y in *)
+
   let expn = Word.max x.expn y.expn in
   if Word.(x.expn > y.expn) then
     let y, loss = rshift radix y Word.(expn - y.expn) in
@@ -366,10 +412,16 @@ let combine_loss more less =
   | ExactlyHalf,_ -> MoreThanHalf
   | _ -> more
 
-let add rm precs radix x y =
-  let x = minimize_exponent radix x in
-  let y = minimize_exponent radix y in
+
+let add rm radix x y =
+  printf "add input: %d, %d + %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac);
+  (* let x = minimize_exponent radix x in *)
+  (* let y = minimize_exponent radix y in *)
+  printf "add minim: %d, %d + %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac);
   let x,y,loss = common_ground radix x y in
+
+  printf "add common: %d, %d; %d, %d\n" (wi x.expn) (wi x.frac) (wi y.expn) (wi y.frac);
+
   let frac = Word.(x.frac + y.frac) in
   let result =
     if Word.(frac >= x.frac) then Some (x.expn, frac, loss)
@@ -409,7 +461,7 @@ let add_or_sub rm subtract a b = match a.value,b.value with
     let is_subtract = Word.is_one Word.(s1 lxor (s2 lxor s3)) in
     let value =
       if is_subtract then sub rm a.radix x y
-      else add rm a.precs a.radix x y in
+      else add rm a.radix x y in
     {a with value}
   | Nan _, _ | Inf _, _ -> a
   | _, Nan _ | _, Inf _ -> b
@@ -530,29 +582,41 @@ let div ?(rm=Nearest_even) a b =
   | Fin x, Fin y when is_zero b -> {a with value = Inf x.sign}
   | Fin x, Fin y ->
     let x = minimize_exponent a.radix x in
-    let y = minimize_exponent a.radix y in
+    let y = maximize_exponent a.radix y in
 
-    printf "x: %d, %d\n" (wi x.expn) (wi x.frac);
-    printf "y: %d, %d\n" (wi y.expn) (wi y.frac);
+    printf "  div input x: %d, %d\n" (wi x.expn) (wi x.frac);
+    printf "  div input y: %d, %d\n" (wi y.expn) (wi y.frac);
 
     let sign = xor_sign x.sign y.sign in
     let extend = Word.zero a.precs in
     let xfrac = Word.concat extend x.frac in
     let yfrac = Word.concat extend y.frac in
     let value = match dif xfrac yfrac x.expn y.expn with
-      | None -> mk_zero (bits_in x.expn)
+      | None ->
+        printf "  div output zero!\n\n";
+        mk_zero (bits_in x.expn)
       | Some (expn, xfrac) ->
         let expn = Word.signed expn in
         let digits = digits_of_precision a.radix (bits_in expn) a.precs in
+        printf "  divide %s %s = " (wdec xfrac) (wdec yfrac);
         let frac,last = divide a.radix digits xfrac yfrac in
+        printf "%s\n" (wdec frac);
         let loss = estimate_loss a.radix last division_extra_digits in
         let frac = round rm sign frac loss in
+        printf "  round: %s\n" (wdec frac);
         let expn = Word.(expn - of_int ~width:(bits_in expn) digits) in
-        let expn,frac = safe_align_right a.radix expn frac in
+        match align_right ~radix:a.radix ~precision:a.precs expn frac with
+        | None -> mk_zero (bits_in x.expn) (* TODO: think here  *)
+        | Some (expn,frac,loss) ->
+        (* let expn,frac,loss = align_right ~radix:a.radix ~precs:a.precs expn frac in *)
+        (* let expn,frac = safe_align_right a.radix expn frac in *)
+        printf "  align: %s (msb %d) (%d %d)\n" (wdec frac) (msb_exn frac) (bits_in frac) (a.precs);
         let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
+        printf "  extract: %s\n" (wdec frac);
         let expn = Word.signed expn in
-        printf "output: expn is %d, frac is %d\n" (wi expn) (wi frac);
-        {sign; frac; expn}  in
+        let value = norm a.radix  {sign; frac; expn} in
+        printf "  div output:  %d, %d\n\n" (wi value.expn) (wi value.frac);
+        value  in
     {a with value = Fin value }
   | Nan _, _ -> a
   | _, Nan _ -> b
@@ -569,41 +633,6 @@ let pow10 precs n =
   if Word.is_zero n then Word.one precs
   else run ten (Word.one w)
 
-let sqrt__ ?(rm=Nearest_even) a =
-  match a.value with
-  | Fin x ->
-    let x = minimize_exponent a.radix x in
-    let digits = digits_of_precision a.radix (bits_in x.expn) a.precs in
-    printf "input x: exp %d, frac %d (%s)\n" (wi @@ Word.signed x.expn) (wi x.frac) (sb x.frac);
-    let is_odd_expn = Word.(is_one (extract_exn ~hi:0 x.expn)) in
-    let frac = Word.(concat (zero a.precs) x.frac) in
-    let expn,frac,ds = if is_odd_expn then
-        let frac = lshift_frac a.radix frac 1 in
-        Word.(signed (pred x.expn)), frac, a.precs + 1
-      else x.expn, frac, a.precs in
-    let expn = Word.(expn / of_int ~width:(bits_in expn) 2) in
-    let two = Word.of_int ~width:(bits_in frac) 2 in
-    let init = Word.(frac / two) in
-    let max = 25 in
-    let rec run x0 n =
-      if n < max then
-        let () = printf "%d / %d = " (wi frac) (wi x0) in
-        let x, _ = divide a.radix digits frac x0 in
-        let () = printf "%d\n" (wi x) in
-        let x0 = lshift_frac a.radix x0 1 in
-        let res = Word.(x0 + x) in
-        printf "res is %d\n" (wi res);
-        let x' = Word.(res / two) in
-        printf "%d --> %d\n\n" (wi x0) (wi x);
-        run x' (n + 1)
-      else x0 in
-    let expn = Word.(expn - of_int ~width:(bits_in expn) digits) in
-    let frac = run init 0 in
-    let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
-    printf "output expn is %d, frac is %d\n"
-      (wi @@ Word.signed expn) (wi frac);
-    {a with value = Fin {sign=Pos; expn; frac} }
-  | _ -> failwith "TODO"
 
 let frac_exn a = match a.value with
   | Fin {frac} -> frac
@@ -627,22 +656,26 @@ let sqrt ?(rm=Nearest_even) a =
     let x = minimize_exponent a.radix x in
     let is_odd_expn = Word.(is_one (extract_exn ~hi:0 x.expn)) in
     let frac = Word.(concat (zero a.precs) x.frac) in
-    let expn,frac,ds = if is_odd_expn then
+    let expn,frac = if is_odd_expn then
         let frac = lshift_frac a.radix frac 1 in
-        Word.(signed (pred x.expn)), frac, a.precs + 1
-      else x.expn, frac, a.precs in
-    let x' = {sign = Pos; frac; expn} in
-    let s = { precs = a.precs; radix = a.radix; value = Fin x' } in
-    let two = {sign = Pos; expn = Word.zero (bits_in expn);
-               frac = Word.of_int ~width:(bits_in frac) 2} in
-    let two = { precs = a.precs; radix = a.radix; value = Fin two } in
+        Word.(signed (pred x.expn)), frac
+      else x.expn, frac in
+    let s =
+      mk ~radix:a.radix Pos expn frac in
+    let two =
+      let expn = Word.zero (bits_in expn) in
+      mk ~radix:a.radix Pos expn (Word.of_int ~width:(bits_in frac) 2) in
     let init = div ~rm s two in
     let max = 15 in
     let rec run x0 n =
       if n < max then
-        let x' = div ~rm (add ~rm x0 (div ~rm s x0)) two in
+        let a1 = div ~rm s x0 in
+        let a2 = add ~rm x0 a1 in
+        printf "sum (%s) (%s) = %s\n"
+          (str_exn x0) (str_exn a1) (str_exn a2);
+        let x' = div ~rm a2 two in
+        printf "%d: %s --> %s\n\n" n (str_exn x0) (str_exn x');
         run x' (n + 1)
-      else x in
-    let value = run init 0 in
-    {a with value = Fin value }
+      else x0 in
+    run init 0
   | _ -> failwith "TODO"
