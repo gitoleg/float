@@ -305,12 +305,6 @@ let mk_nan ?(signaling=false) ~radix precs =
   let value = Nan (signaling, Word.one precs) in
   {radix; precs; value}
 
-(* let mk_zero radix precs expn_bits = *)
-(*   let expn = Word.zero expn_bits in *)
-(*   let frac = Word.zero precs in *)
-(*   let value = Fin {sign = Pos; expn; frac} in *)
-(*   {precs; radix; value} *)
-
 let is_zero x = match x.value with
   | Fin x -> Word.is_zero x.frac
   | _ -> false
@@ -521,7 +515,6 @@ let expn_dif x y =
   else `Nice e
 
 let div ?(rm=Nearest_even) a b =
-  printf "start div\n";
   let mk_zero expn_bits =
     { sign=Pos; expn=Word.zero expn_bits; frac = Word.zero a.precs } in
   let rec dif xfrac yfrac xexpn yexpn =
@@ -558,7 +551,7 @@ let div ?(rm=Nearest_even) a b =
         let expn,frac = safe_align_right a.radix expn frac in
         let frac = Word.extract_exn ~hi:(a.precs - 1) frac in
         let expn = Word.signed expn in
-        printf "res expn is %d, frac is %d\n" (wi expn) (wi frac);
+        printf "output: expn is %d, frac is %d\n" (wi expn) (wi frac);
         {sign; frac; expn}  in
     {a with value = Fin value }
   | Nan _, _ -> a

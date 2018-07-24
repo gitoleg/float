@@ -58,13 +58,23 @@ module Front = struct
   let normalize_ieee bias biased_expn frac =
     let min_expn = 1 in
     let max_expn = bias * 2 - 1 in
-    let rec run expn frac =
+    let rec norm_expn expn frac =
       if expn > max_expn then
-        run (pred expn) Word.(frac lsl b1)
+        norm_expn (pred expn) Word.(frac lsl b1)
       else if expn < min_expn then
-        run (succ expn) Word.(frac lsr b1)
+        norm_expn (succ expn) Word.(frac lsr b1)
       else expn, frac in
-    run biased_expn frac
+    let norm_frac expn frac =
+      match msb frac with
+      | None -> expn, frac
+      | Some i ->
+        let len = bits_in frac in
+        let shift = len - i - 1 in
+        let frac = lshift_frac 2 frac shift in
+        let expn = expn - shift in
+        expn, frac in
+    let expn, frac = norm_expn biased_expn frac in
+    norm_frac expn frac
 
   let to_single_float_bits t =
     let (^) = Word.concat in
@@ -76,8 +86,8 @@ module Front = struct
       let expn = bias + expn in
       let n = Word.bitwidth frac - 1 in
       let expn = expn + n in
-      let frac = drop_hd frac in (* in assumption that it's normal value *)
       let expn,frac = normalize_ieee bias expn frac in
+      let frac = drop_hd frac in (* in assumption that it's normal value *)
       let expn = Word.of_int ~width:8 expn in
       word_of_sign sign ^ expn ^ frac
     | Fin x -> failwith "can't convert from radix other than 2"
@@ -95,18 +105,14 @@ module Front = struct
     match t.value with
     | Fin x when t.radix = 2 ->
       let {sign; expn; frac} = norm t.radix x in
-      let () = printf " in test: %d %d\n" (wi expn) (wi frac) in
-
       let bias = 1023 in
       let expn = Word.to_int_exn expn in
       let expn = bias + expn in
 
       let n = Word.bitwidth frac - 1 in
       let expn = expn + n in
-      let frac = drop_hd frac in (* in assumption that it's normal value *)
-      printf "expn is %d\n" expn;
       let expn,frac = normalize_ieee bias expn frac in
-      printf "expn is %d\n" expn;
+      let frac = drop_hd frac in (* in assumption that it's normal value *)
       let expn = Word.of_int ~width:11 expn in
       word_of_sign sign ^ expn ^ frac
     | Fin x -> failwith "can't convert from radix other than 2"
@@ -175,9 +181,7 @@ module Front = struct
       let expn = Word.to_int_exn (Word.signed expn) in
       let frac = wdec frac in
       let len = String.length frac in
-
       (* printf "float_of_decimal input: %d %s (%d len)\n" expn frac len; *)
-
       let frac =
         if expn = 0 then frac
         else if expn < 0 && expn < -len then
@@ -249,7 +253,7 @@ end
 
 module Test_space = struct
 
-  let deconstruct x =
+  let deconstruct32 x =
     let w = Word.of_int32 (Int32.bits_of_float x) in
     let expn = Word.extract_exn ~hi:30 ~lo:23 w in
     let bias = Word.of_int ~width:8 127 in
@@ -257,6 +261,15 @@ module Test_space = struct
     let frac = Word.extract_exn ~hi:22 w in
     printf "ocaml %f: unbiased expn %d, frac %s, total %s\n"
       x (wi expn) (string_of_bits frac) (string_of_bits32 w)
+
+  let deconstruct64 x =
+    let w = Word.of_int64 (Int64.bits_of_float x) in
+    let expn = Word.extract_exn ~hi:62 ~lo:52 w in
+    let bias = Word.of_int ~width:11 1023 in
+    let expn = Word.(expn - bias) in
+    let frac = Word.extract_exn ~hi:51 w in
+    printf "ocaml %f: unbiased expn %d, frac %s, total %s\n"
+      x (wi expn) (string_of_bits frac) (string_of_bits64 w)
 
 
   let word_of_float x =
@@ -418,6 +431,8 @@ module Test_space = struct
 
   end
 
+  (* let () = deconstruct64 4.0 *)
+
   let test_div () =
     let x = 211624.5 in
     let y = 2.0 in
@@ -428,7 +443,7 @@ module Test_space = struct
 
   let () = 2.0 / 0.5
 
-  (* module Run = Main_test(struct type t = unit end) *)
+  module Run = Main_test(struct type t = unit end)
 
   let test_OCAML_sqrt () =
     let open Caml in
