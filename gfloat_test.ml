@@ -104,12 +104,10 @@ module Front = struct
     let (^) = Word.concat in
     match t.value with
     | Fin x when t.radix = 2 ->
-      printf "frac is %s (%d)\n" (wdec x.frac) (bits_in x.frac);
       let {sign; expn; frac} = norm t.radix x in
       let bias = 1023 in
       let expn = Word.to_int_exn expn in
       let expn = bias + expn in
-
       let n = Word.bitwidth frac - 1 in
       let expn = expn + n in
       let expn,frac = normalize_ieee bias expn frac in
@@ -279,17 +277,23 @@ module Test_space = struct
   let bits_of_float x =
     string_of_bits32 (Word.of_int32 (Int32.bits_of_float x))
 
-  type op =
+  type binop =
     | Add
     | Sub
     | Mul
     | Div
 
-  let str_of_op = function
+  type unop =
+    | Sqrt
+
+  let str_of_binop = function
     | Add -> "+"
     | Sub -> "-"
     | Mul -> "*"
     | Div -> "/"
+
+  let str_of_unop = function
+    | Sqrt -> "sqrt"
 
   let true_result x y op = match op with
       | Add -> x +. y
@@ -297,11 +301,14 @@ module Test_space = struct
       | Mul -> x *. y
       | Div -> x /. y
 
-  let f_of_op = function
+  let binop = function
     | Add -> add ~rm:Nearest_even
     | Sub -> sub ~rm:Nearest_even
     | Mul -> mul ~rm:Nearest_even
     | Div -> div ~rm:Nearest_even
+
+  let unop = function
+    | Sqrt -> sqrt ~rm:Nearest_even
 
   let compare_str x y =
     if String.equal x y then "ok" else "POSSIBLE FAIL"
@@ -311,13 +318,13 @@ module Test_space = struct
   let decimal op x y =
     let f1 = Front.decimal_of_string (my_string_of_float x) in
     let f2 = Front.decimal_of_string (my_string_of_float y) in
-    let fr = (f_of_op op) f1 f2 in
+    let fr = (binop op) f1 f2 in
     Front.float_of_decimal fr
 
   let ieee_single op x y =
     let f1 = Front.single_of_float x in
     let f2 = Front.single_of_float y in
-    let fr = (f_of_op op) f1 f2 in
+    let fr = (binop op) f1 f2 in
     let fb = Front.to_single_float_bits fr in
     let fb = Word.signed fb in
     Int32.float_of_bits (Word.to_int32_exn fb)
@@ -325,7 +332,7 @@ module Test_space = struct
   let ieee_double op x y =
     let f1 = Front.double_of_float x in
     let f2 = Front.double_of_float y in
-    let fr = (f_of_op op) f1 f2 in
+    let fr = (binop op) f1 f2 in
     let fb = Front.to_double_float_bits fr in
     let fb = Word.signed fb in
     Int64.float_of_bits (Word.to_int64_exn fb)
@@ -340,10 +347,29 @@ module Test_space = struct
     let res_str = sprintf "%.6f" res in
     let bin_str = sprintf "%.6f" bin in
     let dec_str = sprintf "%.6f" dec in
-    printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_op op) y bin_str res_str
+    printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_binop op) y bin_str res_str
       (compare_str res_str bin_str);
-    printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_op op) y dec_str res_str
+    printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_binop op) y dec_str res_str
       (compare_str res_str dec_str)
+
+  let true_result_unop op x =
+    match op with
+    | Sqrt -> Float.sqrt x
+
+  let run_unop op x =
+    let res = true_result_unop op x in
+    let bin = unop op @@ (Front.double_of_float x) in
+    let bin = Front.float_of_double bin in
+    let dec = unop op @@ Front.decimal_of_string (my_string_of_float x) in
+    let dec = Front.float_of_decimal dec in
+    let res_str = sprintf "%.6f" res in
+    let bin_str = sprintf "%.6f" bin in
+    let dec_str = sprintf "%.6f" dec in
+    printf "bin: %g %s = %s(%s) %s\n" x (str_of_unop op) bin_str res_str
+      (compare_str res_str bin_str);
+    printf "dec: %g %s = %s(%s) %s\n" x (str_of_unop op) dec_str res_str
+      (compare_str res_str dec_str)
+
 
   let create x =
     let bin32 x =
@@ -377,6 +403,7 @@ module Test_space = struct
   let (-) = run Sub
   let ( * ) = run Mul
   let ( / ) = run Div
+  let ( sqrt ) = run_unop Sqrt
   let space () = printf "\n\n"
 
   module Main_test(F : T) = struct
@@ -426,64 +453,15 @@ module Test_space = struct
       3.0 / 32.0;
       324.32423 / 1.2;
       42.3 / 0.0;
-      0.0 / 0.0
+      0.0 / 0.0;
+
+      sqrt 423245.0;
+      sqrt 0.213;
+      sqrt 1.2356;
+      sqrt 1.0
 
   end
 
-  (* module Run = Main_test(struct type t = unit end) *)
-
-  (* div input x: -9, 2645300248180065 *)
-  (* div input y: 0, 2 *)
-  (* div output:  -10, 4219301986159333 *)
-
-  let a () =
-    let mk_expn x = Word.signed (Word.of_int ~width:10 x) in
-    let mk_frac x = Word.of_int ~width:52 x in
-    let a1 = mk ~radix:10 Pos (mk_expn (-9)) (mk_frac 2645300248180065) in
-    let a2 = mk ~radix:10 Pos (mk_expn 0) (mk_frac 2) in
-    let a = div a1 a2 in
-    let r = Front.float_of_decimal a in
-    printf "my res %.6f\n" r
-
-  let a () =
-    let a1 = Front.decimal_of_float 42324500.0 in
-    let a2 = Front.decimal_of_float 2.0 in
-    let a3 = div a1 a2 in
-    let a4 = add a3 a2 in
-    let r = Front.float_of_decimal a4 in
-    printf "%f\n" r
-
-  let test_OCAML_sqrt () =
-    let open Caml in
-    let value = 423245.0 in
-    let init = value /. 2.0 in
-    let max = 25 in
-    let rec run x0 i =
-      if i < max then
-        (* let a1 = value /. x0 in *)
-        (* let a2 = x0 +. a1 in *)
-        (* let a3 = a2 /. 2.0 in *)
-        let x' = (x0 +. value /. x0) /. 2.0 in
-        let () = printf "%d: %f ---> %.7f\n" i x0 x' in
-        (* let () = printf "  value / x0 %.7f\n" a1 in *)
-        (* let () = printf "  x0 + value / x0 %.7f\n" a2 in *)
-        (* let () = printf "  0.5(x0 + value / x0) %.7f\n" a3 in *)
-        run x' (i + 1)
-      else x0 in
-    let a = run init 0 in
-    printf "a is %f\n" a
-
-  (* TODO: don't forget to try different seeds, e.g. a value itself *)
-  let test_sqrt =
-    let x = 423245.0 in
-    let () = create x in
-    let xb = Front.double_of_float x in
-    let yb = sqrt xb in
-    let zb = Front.float_of_double yb in
-    printf "binary sqrt: %f (%f)\n" zb (Float.sqrt x);
-    let xd = Front.decimal_of_float x in
-    let yd = sqrt xd in
-    let zd = Front.float_of_decimal yd in
-    printf "decimal sqrt: %f (%f)\n" zd (Float.sqrt x)
+  module Run = Main_test(struct type t = unit end)
 
 end
