@@ -79,6 +79,8 @@ module Front = struct
   let to_single_float_bits t =
     let (^) = Word.concat in
     match t.value with
+    | Fin x when is_zero t ->
+      Word.zero 32
     | Fin x when t.radix = 2 ->
       let {sign; expn; frac} = norm t.radix x in
       let bias = 127 in
@@ -103,6 +105,7 @@ module Front = struct
   let to_double_float_bits t =
     let (^) = Word.concat in
     match t.value with
+    | Fin x when is_zero t -> Word.zero 64
     | Fin x when t.radix = 2 ->
       let {sign; expn; frac} = norm t.radix x in
       let bias = 1023 in
@@ -269,7 +272,6 @@ module Test_space = struct
     printf "ocaml %f: unbiased expn %d, frac %s, total %s\n"
       x (wi expn) (string_of_bits frac) (string_of_bits64 w)
 
-
   let word_of_float x =
     let x = Int32.bits_of_float x in
     Word.of_int32 ~width:32 x
@@ -360,15 +362,15 @@ module Test_space = struct
     let res = true_result_unop op x in
     let bin = unop op @@ (Front.double_of_float x) in
     let bin = Front.float_of_double bin in
-    let dec = unop op @@ Front.decimal_of_string (my_string_of_float x) in
-    let dec = Front.float_of_decimal dec in
+    (* let dec = unop op @@ Front.decimal_of_string (my_string_of_float x) in *)
+    (* let dec = Front.float_of_decimal dec in *)
     let res_str = sprintf "%.6f" res in
     let bin_str = sprintf "%.6f" bin in
-    let dec_str = sprintf "%.6f" dec in
+    (* let dec_str = sprintf "%.6f" dec in *)
     printf "bin: %g %s = %s(%s) %s\n" x (str_of_unop op) bin_str res_str
-      (compare_str res_str bin_str);
-    printf "dec: %g %s = %s(%s) %s\n" x (str_of_unop op) dec_str res_str
-      (compare_str res_str dec_str)
+      (compare_str res_str bin_str)
+    (* printf "dec: %g %s = %s(%s) %s\n" x (str_of_unop op) dec_str res_str *)
+    (*   (compare_str res_str dec_str) *)
 
 
   let create x =
@@ -454,11 +456,18 @@ module Test_space = struct
       324.32423 / 1.2;
       42.3 / 0.0;
       0.0 / 0.0;
+      space ();
 
       sqrt 423245.0;
       sqrt 0.213;
       sqrt 1.2356;
-      sqrt 1.0
+      sqrt 0.0;
+      sqrt 1.0;
+      sqrt 2.0;
+      sqrt 3.0;
+      sqrt 20.0;
+      sqrt (~-.1.0);
+      space ()
 
   end
 
