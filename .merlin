@@ -2,3 +2,4 @@ S .
 B _build/
 
 PKG bap
+PKG oUnit

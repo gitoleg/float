@@ -1,7 +1,8 @@
 open Core_kernel
+open OUnit2
 open Bap.Std
-open Gfloat
 
+open Gfloat
 open Gfloat.Debug
 
 type ieee_bin = {
@@ -140,7 +141,7 @@ let rec truncate max_int expn x =
     truncate max_int (expn + 1)
       (String.subo ~len:(String.length x - 1) x)
 
-let decimal_precision = 26
+let decimal_precision = 53
 let decimal_expn_bits = 10
 
 let decimal_of_string = function
@@ -174,6 +175,10 @@ let insert_point str before =
         if i = before then c :: '.' :: acc
         else c :: acc) |> List.rev |> String.of_char_list
 
+let attach_sign x = function
+  | Pos -> x
+  | Neg -> ~-. x
+
 let float_of_decimal t = match t.value with
   | Fin {expn;frac} ->
     let expn = Word.to_int_exn (Word.signed expn) in
@@ -198,19 +203,8 @@ let float_of_decimal t = match t.value with
     let frac = float_of_string frac in
     if t.sign = Neg then ~-. frac
     else frac
-  | Inf ->
-    begin
-      match t.sign with
-      | Pos -> Float.infinity
-      | Neg -> Float.neg_infinity
-    end
-  | Nan _ ->
-    let x = Float.nan in
-    match t.sign with
-    | Pos -> x
-    | Neg -> ~-. x
-
-
+  | Inf   -> attach_sign Float.infinity t.sign
+  | Nan _ -> attach_sign Float.nan t.sign
 
 let hexadecimal_of_string x =
   let x = truncate_zeros x in
@@ -259,96 +253,8 @@ let word_of_float x =
 let bits_of_float x =
   string_of_bits32 (Word.of_int32 (Int32.bits_of_float x))
 
-type binop =
-  | Add
-  | Sub
-  | Mul
-  | Div
-
-type unop =
-  | Sqrt
-
-let str_of_binop = function
-  | Add -> "+"
-  | Sub -> "-"
-  | Mul -> "*"
-  | Div -> "/"
-
-let str_of_unop = function
-  | Sqrt -> "sqrt"
-
-let true_result x y op = match op with
-  | Add -> x +. y
-  | Sub -> x -. y
-  | Mul -> x *. y
-  | Div -> x /. y
-
-let binop = function
-  | Add -> add ~rm:Nearest_even
-  | Sub -> sub ~rm:Nearest_even
-  | Mul -> mul ~rm:Nearest_even
-  | Div -> div ~rm:Nearest_even
-
-let unop = function
-  | Sqrt -> sqrt ~rm:Nearest_even
-
 let compare_str x y =
   if String.equal x y then "ok" else "POSSIBLE FAIL"
-
-let my_string_of_float x = sprintf "%.15f" x
-
-let decimal op x y =
-  let f1 = decimal_of_string (my_string_of_float x) in
-  let f2 = decimal_of_string (my_string_of_float y) in
-  let fr = (binop op) f1 f2 in
-  float_of_decimal fr
-
-let ieee_single op x y =
-  let f1 = single_of_float x in
-  let f2 = single_of_float y in
-  let fr = (binop op) f1 f2 in
-  float_of_single fr
-
-let ieee_double op x y =
-  let f1 = double_of_float x in
-  let f2 = double_of_float y in
-  let fr = (binop op) f1 f2 in
-  float_of_double fr
-
-let double_nan = double_of_float Float.nan
-let double_inf = double_of_float Float.infinity
-let decimal_nan = decimal_of_float Float.nan
-let decimal_inf = decimal_of_float Float.infinity
-
-let run op x y =
-  let res = true_result x y op in
-  let bin = ieee_double op x y in
-  let dec = decimal op x y in
-  let res_str = sprintf "%.6f" res in
-  let bin_str = sprintf "%.6f" bin in
-  let dec_str = sprintf "%.6f" dec in
-  printf "bin: %g %s %g = %s(%s) %s\n" x (str_of_binop op) y bin_str res_str
-    (compare_str res_str bin_str);
-  printf "dec: %g %s %g = %s(%s) %s\n" x (str_of_binop op) y dec_str res_str
-    (compare_str res_str dec_str)
-
-let true_result_unop op x =
-  match op with
-  | Sqrt -> Float.sqrt x
-
-let run_unop op x =
-  let res = true_result_unop op x in
-  let bin = unop op @@ (double_of_float x) in
-  let bin = float_of_double bin in
-  let dec = unop op @@ decimal_of_string (my_string_of_float x) in
-  let dec = float_of_decimal dec in
-  let res_str = sprintf "%.6f" res in
-  let bin_str = sprintf "%.6f" bin in
-  let dec_str = sprintf "%.6f" dec in
-  printf "bin: %g %s = %s(%s) %s\n" x (str_of_unop op) bin_str res_str
-    (compare_str res_str bin_str);
-  printf "dec: %g %s = %s(%s) %s\n" x (str_of_unop op) dec_str res_str
-    (compare_str res_str dec_str)
 
 let create x =
   let bin32 x =
@@ -373,160 +279,223 @@ let create x =
       res cmp_bin32 cmp_bin64 cmp_dec in
   run x
 
-let neg x = ~-. x
-let (+) = run Add
-let (-) = run Sub
-let ( * ) = run Mul
-let ( / ) = run Div
-let ( sqrt ) = run_unop Sqrt
-let space () = printf "\n\n"
+let str_of_float f = sprintf "%.16h" f
+let cmp x y = String.equal (str_of_float x) (str_of_float y)
+
+let gen_binop of_float to_float op x y =
+  op (of_float x) (of_float y) |> to_float
+
+let gen_unop of_float to_float op x =
+  op (of_float x) |> to_float
+
+let base2_binop = gen_binop double_of_float float_of_double
+let base10_binop = gen_binop decimal_of_float float_of_decimal
+let base2_unop = gen_unop double_of_float float_of_double
+let base10_unop = gen_unop decimal_of_float float_of_decimal
 let nan = Float.nan
 let inf = Float.infinity
 let ninf = Float.neg_infinity
 
-module Main_test(F : T) = struct
+module Run_test(F : T) = struct
 
-  let () =
-    create 4.2;
-    create 4.28;
-    create 2.2;
-    create 7.18;
-    create (~-.2.00008);
-    space ();
+  let binop op op' x y ctxt =
+    let real = op x y in
+    let r2 = base2_binop op' x y in
+    let r10 = base10_binop op' x y in
+    assert_equal ~ctxt ~cmp real r2;
+    assert_equal ~ctxt ~cmp real r10
 
-    4.2 + 2.3;
-    4.2 + 2.98;
-    2.2 + 4.28;
-    2.2 + (neg 4.28);
-    (neg 2.2) + 4.28;
-    2.2 + 2.46;
-    0.0000001 + 0.00000002;
-    4.2 + 2.98;
-    space ();
+  let unop op op' x ctxt =
+    let real = op x in
+    let r2 = base2_unop op' x in
+    let r10 = base10_unop op' x in
+    assert_equal ~ctxt ~cmp real r2;
+    assert_equal ~ctxt ~cmp real r10
 
-    4.2 - 2.28;
-    4.28 - 2.2;
-    2.2 - 4.28;
-    2.2 - (neg 4.28);
-    2.2 - 2.6;
-    (neg 2.2) - 2.46;
-    (neg 2.2) - (neg 2.46);
-    0.0000001 - 0.00000002;
-    space ();
+  let add x y ctxt = binop (+.) add x y ctxt
+  let sub x y ctxt = binop (-.) sub x y ctxt
+  let mul x y ctxt = binop ( *. ) mul x y ctxt
+  let div x y ctxt = binop ( /. ) div x y ctxt
+  let sqrt x ctxt = unop Float.sqrt sqrt x ctxt
 
-    1.0 * 2.5;
-    2.5 * 0.5;
-    4.2 * 3.4;
-    0.01 * 0.02;
-    1.0 * 0.5;
-    1.0 * (neg 0.5);
-    (neg 1.0) * (neg 0.5);
-    space ();
+  let (+) = add
+  let (-) = sub
+  let ( * ) = mul
+  let ( / ) = div
+  let ( sqrt ) = sqrt
 
-    1.0 / 0.0;
-    2.0 / 0.5;
-    1.0 / 3.0;
-    2.4 / 3.123131;
-    0.1313134 / 0.578465631;
-    3.0 / 32.0;
-    324.32423 / 1.2;
-    42.3 / 0.0;
-    0.0 / 0.0;
-    space ();
+  let suite () =
+    let neg x = ~-.x in
+    "Gfloat test" >::: [
 
-    sqrt 423245.0;
-    sqrt 0.213;
-    sqrt 1.2356;
-    sqrt 0.0;
-    sqrt 1.0;
-    sqrt 2.0;
-    sqrt 3.0;
-    sqrt 20.0;
-    sqrt (~-.1.0);
-    space ();
+      (* special cases  *)
+      "nan  + nan"  >:: nan  + nan;
+      "inf  + inf"  >:: inf  + inf;
+      "-inf + -inf" >:: ninf + ninf;
+      "nan  + -inf" >:: nan  + ninf;
+      "-inf + nan"  >:: ninf + nan;
+      "nan  + inf"  >:: nan  + inf;
+      "inf  + nan"  >:: inf  + nan;
+      "-inf + inf"  >:: ninf + inf;
+      "inf  + -inf" >:: inf  + ninf;
 
-    nan  + nan;
-    inf  + inf;
-    ninf + ninf;
-    nan  + ninf;
-    ninf + nan;
-    nan  + inf;
-    inf  + nan;
-    ninf + inf;
-    inf  + ninf;
-    space();
+      "nan  - nan"  >:: nan  - nan;
+      "inf  - inf"  >:: inf  - inf;
+      "-inf - -inf" >:: ninf - ninf;
+      "nan  - -inf" >:: nan  - ninf;
+      "-inf - nan"  >:: ninf - nan;
+      "nan  - inf"  >:: nan  - inf;
+      "inf  - nan"  >:: inf  - nan;
+      "-inf - inf"  >:: ninf - inf;
+      "inf  - -inf" >:: inf  - ninf;
 
-    nan  - nan;
-    inf  - inf;
-    ninf - ninf;
-    nan  - ninf;
-    ninf - nan;
-    nan  - inf;
-    inf  - nan;
-    ninf - inf;
-    inf  - ninf;
-    space();
+      "nan  * nan"  >:: nan  * nan;
+      "inf  * inf"  >:: inf  * inf;
+      "-inf * -inf" >:: ninf * ninf;
+      "nan  * -inf" >:: nan  * ninf;
+      "-inf * nan"  >:: ninf * nan;
+      "nan  * inf"  >:: nan  * inf;
+      "inf  * nan"  >:: inf  * nan;
+      "-inf * inf"  >:: ninf * inf;
+      "inf  * -inf" >:: inf  * ninf;
 
-    nan  * nan;
-    inf  * inf;
-    ninf * ninf;
-    nan  * ninf;
-    ninf * nan;
-    nan  * inf;
-    inf  * nan;
-    ninf * inf;
-    inf  * ninf;
-    space();
+      "nan  / nan"  >:: nan  / nan;
+      "inf  / inf"  >:: inf  / inf;
+      "-inf / -inf" >:: ninf / ninf;
+      "nan  / -inf" >:: nan  / ninf;
+      "-inf / nan"  >:: ninf / nan;
+      "nan  / inf"  >:: nan  / inf;
+      "inf  / nan"  >:: inf  / nan;
+      "-inf / inf"  >:: ninf / inf;
+      "inf  / -inf" >:: inf  / ninf;
 
-    nan  / nan;
-    inf  / inf;
-    ninf / ninf;
-    nan  / ninf;
-    ninf / nan;
-    nan  / inf;
-    inf  / nan;
-    ninf / inf;
-    inf  / ninf;
-    space();
+      "sqrt nan"    >:: sqrt nan;
+      "sqrt inf"    >:: sqrt inf;
+      "sqrt -inf"   >:: sqrt ninf;
 
-    sqrt nan;
-    sqrt inf;
-    sqrt ninf;
-    sqrt ninf;
-    sqrt nan;
-    sqrt inf;
-    sqrt nan;
-    sqrt inf;
-    sqrt ninf;
-    space();
+      (* add *)
+      "4.2 + 2.3"   >:: 4.2 + 2.3;
+      "4.2 + 2.98"  >:: 4.2 + 2.98;
+      "2.2 + 4.28"  >:: 2.2 + 4.28;
+      "2.2 + -4.28" >:: 2.2 + (neg 4.28);
+      "-2.2 + 4.28" >:: (neg 2.2) + 4.28;
+      "2.2 + 2.46"  >:: 2.2 + 2.46;
+      "4.2 + 2.98"  >:: 4.2 + 2.98;
+      "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
 
-(*     // See Note 1. *)
-(*     { PInf, SNaN, "nan", APFloat::opInvalidOp, APFloat::fcNaN }, *)
-(* #endif *)
-(*     { PInf, PNormalValue, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, MNormalValue, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, PLargestValue, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, MLargestValue, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, PSmallestValue, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, MSmallestValue, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, PSmallestNormalized, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { PInf, MSmallestNormalized, "inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { MInf, PInf, "nan", APFloat::opInvalidOp, APFloat::fcNaN }, *)
-(*     { MInf, MInf, "-inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { MInf, PZero, "-inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { MInf, MZero, "-inf", APFloat::opOK, APFloat::fcInfinity }, *)
-(*     { MInf, QNaN, "nan", APFloat::opOK, APFloat::fcNaN }, *)
+      (* sub *)
+      "4.2 - 2.28"    >:: 4.2 - 2.28;
+      "4.28 - 2.2"    >:: 4.28 - 2.2;
+      "2.2 - 4.28"    >:: 2.2 - 4.28;
+      "2.2 - -4.28"   >:: 2.2 - (neg 4.28);
+      "2.2 - 2.6"     >:: 2.2 - 2.6;
+      "-2.2 - 2.46"   >:: (neg 2.2) - 2.46;
+      "-2.2 - -2.46)" >:: (neg 2.2) - (neg 2.46);
+      "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
+
+      (* mul *)
+      "1.0 * 2.5"    >:: 1.0 * 2.5;
+      "2.5 * 0.5"    >:: 2.5 * 0.5;
+      "4.2 * 3.4"    >:: 4.2 * 3.4;
+      "0.01 * 0.02"  >:: 0.01 * 0.02;
+      "1.0 * 0.5"    >:: 1.0 * 0.5;
+      "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
+      "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+
+      (* div *)
+      "1.0 / 0.0"  >:: 1.0 / 0.0;
+      "2.0 / 0.5"  >:: 2.0 / 0.5;
+      "1.0 / 3.0"  >:: 1.0 / 3.0;
+      "3.0 / 32.0" >:: 3.0 / 32.0;
+      "42.3 / 0.0" >:: 42.3 / 0.0;
+      "0.0 / 0.0"  >:: 0.0 / 0.0;
+      "324.32423 / 1.2" >:: 324.32423 / 1.2;
+      "2.4 / 3.123131"  >:: 2.4 / 3.123131;
+      "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
+
+      (* sqrt  *)
+      "sqrt 423245.0" >:: sqrt 423245.0;
+      "sqrt 0.213"    >:: sqrt 0.213;
+      "sqrt 1.2356"   >:: sqrt 1.2356;
+      "sqrt 0.0"      >:: sqrt 0.0;
+      "sqrt 1.0"      >:: sqrt 1.0;
+      "sqrt 2.0"      >:: sqrt 2.0;
+      "sqrt 3.0"      >:: sqrt 3.0;
+      "sqrt 20.0"     >:: sqrt 20.0;
+      "sqrt (-1)"     >:: sqrt (neg 1.0);
+    ]
+
+  let () = run_test_tt_main (suite ())
 
 end
 
-module Run = Main_test(struct type t = unit end)
+module Run_manually(F : T) = struct
 
-(* let () = deconstruct64 Float.epsilon_float *)
-(* let () = printf "min is %.56f\n" Float.epsilon_float *)
-(* let () = printf "max is %f\n" Float.max_finite_value *)
-(* let x = largest ~base:2 11 53 *)
-(* let y = float_of_double x *)
-(* let () = printf "my max y is %f\n" y *)
-(* let x = least ~base:2 11 53 *)
-(* let y = float_of_double x *)
-(* let () = printf "my min y is %f\n" y *)
+  let str_of_float x = sprintf "%.15f" x
+
+  let unop2 opstr op op' x =
+    let real = op x in
+    let res = base2_unop op' x in
+    let real_str = str_of_float real in
+    let res_str = str_of_float res in
+    if not (String.equal real_str res_str) then
+      printf "FAIL: base 2, %s %f, real %s <> %s\n"
+        opstr x real_str res_str
+
+  let unop10 opstr op op' x =
+    let real = op x in
+    let res = base10_unop op' x in
+    let real_str = str_of_float real in
+    let res_str = str_of_float res in
+    if not (String.equal real_str res_str) then
+      printf "FAIL: base 10, %s %f, real %s <> %s\n"
+        opstr x real_str res_str
+
+  let unop opstr op op' x =
+    let _ = [
+      unop2 opstr op op' x;
+      unop10 opstr op op' x;
+    ] in ()
+
+  let binop2 opstr op op' x y =
+    let real = op x y in
+    let res = base2_binop op' x y in
+    let real_str = str_of_float real in
+    let res_str = str_of_float res in
+    if not (String.equal real_str res_str) then
+      printf "FAIL: base 2, %f %s %f, real %s <> %s\n"
+        x opstr y real_str res_str
+
+  let binop10 opstr op op' x y =
+    let real = op x y in
+    let res = base10_binop op' x y in
+    let real_str = str_of_float real in
+    let res_str = str_of_float res in
+    if not (String.equal real_str res_str) then
+      printf "FAIL: base 10, %f %s %f, real %s <> %s\n"
+        x opstr y real_str res_str
+
+  let binop opstr op op' x y =
+    let _ = [
+      binop2 opstr op op' x y;
+      (* binop10 opstr op op' x y; *)
+    ] in ()
+
+  let add x y = binop "+" (+.) add x y
+  let sub x y = binop "-" (-.) sub x y
+  let mul x y = binop "*" ( *. ) mul x y
+  let div x y = binop "/" ( /. ) div x y
+  let sqrt x = unop "sqrt" Float.sqrt sqrt x
+
+  let (+) = add
+  let (-) = sub
+  let ( * ) = mul
+  let ( / ) = div
+  let ( sqrt ) = sqrt
+
+  let () = 4.2 - 2.28
+
+end
+
+(* module Run = Run_test(struct type t = unit end) *)
+module Run = Run_manually(struct type t = unit end)
