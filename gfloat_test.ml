@@ -223,13 +223,13 @@ let string_of_decimal t =
 
 let float_of_decimal x = float_of_string (string_of_decimal x)
 
-let xs = "9.423424255353534543"
-let ys = "1003.923627544745493"
-let x = decimal_of_string xs
-let y = decimal_of_string ys
-let z = float_of_decimal (add x y)
-let r = sprintf "%.21f" (float_of_string xs +. float_of_string ys)
-let () = printf "%.21f\n%s\n" z r
+(* let xs = "9.423424255353534543" *)
+(* let ys = "1003.923627544745493" *)
+(* let x = decimal_of_string xs *)
+(* let y = decimal_of_string ys *)
+(* let z = float_of_decimal (add x y) *)
+(* let r = sprintf "%.21f" (float_of_string xs +. float_of_string ys) *)
+(* let () = printf "%.21f\n%s\n" z r *)
 
 let hexadecimal_of_string x =
   let x = truncate_zeros x in
@@ -554,14 +554,14 @@ module Run_manually(F : T) = struct
   let ( / ) = div
   let ( sqrt ) = sqrt
 
-  (* let () = 4.2 - 2.28 *)
-  (* let () = (neg 2.2) + 4.8 *)
+  let () = 4.2 - 2.28
+  let () = (neg 2.2) + 4.8
   let () = 0.01 - 0.0002
-  (* let () = 0.0000001 - 0.00000002 *)
+  let () = 0.0000001 - 0.00000002
 end
 
 (* module Run1 = Run_test(struct type t = unit end) *)
-(* module Run2 = Run_manually(struct type t = unit end) *)
+module Run2 = Run_manually(struct type t = unit end)
 
 (* let () = *)
 (*   let x = 0.0002 in *)

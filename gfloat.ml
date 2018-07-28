@@ -507,35 +507,24 @@ let sub rm a b =
     let y = minimize_exponent a.base y in
     let x = extend x 1 in
     let y = extend y 1 in
-    pr_xy "\ninput" a.base x y;
     let x,y,loss,reverse = common_ground2 ~subtract:true a.base x y in
     let loss = invert_loss loss in
-    let borrow = loss <> ExactlyZero in
-    pr_xy "common"  a.base x y;
-    printf "borrow? %b, reverse? %b, loss: %s\n" borrow reverse (string_of_loss loss);
     let borrow = if loss = ExactlyZero then Word.b0 else Word.b1 in
     let frac = if reverse then Word.(y.frac - x.frac - borrow)
       else Word.(x.frac - y.frac - borrow) in
-    printf "%s <-- exactly subtracted\n" (sb frac);
     let sign = if reverse then revert_sign a.sign else a.sign in
-    printf "before rounding %s %s\n" (sb frac) (string_of_loss loss);
-
-    let aa = match
+    begin
+    match
         align_right ~base:a.base ~precision:a.prec x.expn frac with
-    | None -> printf "will do it one day. TODO!\n"
+    | None -> failwith "will do it one day. TODO!\n"
     | Some (expn, frac, loss') ->
-
-      printf "maybe frac is %s\n" (sb frac) in
-      (* let loss = combine_loss loss' loss in *)
-
-    (* let frac = round rm sign frac loss in *)
-    (* let value = {expn=x.expn; frac} in *)
-    let value = minimize_exponent a.base {expn=x.expn; frac} in
-    let value = round' rm sign value loss in
-    printf "after  rounding %s\n" (sb value.frac);
-    let value = Fin value in
-    {a with value; sign}
-  | Nan _, _ -> a
+      let loss = combine_loss loss' loss in
+      let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
+      let frac = round rm sign frac loss in
+      let value = Fin {expn; frac} in
+      {a with value; sign}
+  end
+    | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf, Inf -> mk_nan ~sign:Neg ~base:a.base a.prec
   | Inf, _ -> a
