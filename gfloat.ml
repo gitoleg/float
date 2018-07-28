@@ -111,7 +111,6 @@ module Debug = struct
     | None -> None
     | Some (i,_) -> Some i
 
-
   let frac_exn a = match a.value with
     | Fin {frac} -> frac
     | _ -> failwith "frac unavailable"
@@ -127,6 +126,15 @@ module Debug = struct
   let str_exn a =
     let e, f = data_exn a in
     sprintf "expn %d, frac %d" (wi e) (wi f)
+
+  let pr_xy pref base x y = match base with
+    | 2 ->
+      printf "%s:\n  x: %d, %s\n  y: %d, %s\n" pref
+        (wi x.expn) (sb x.frac) (wi y.expn) (sb y.frac)
+    | _ ->
+      printf "%s:\n  x: %d, %s\n  y: %d, %s\n" pref
+        (wi x.expn) (wdec x.frac) (wi y.expn) (wdec y.frac)
+
 end
 
 open Debug
@@ -194,6 +202,10 @@ let round rm sign frac loss =
     if Word.(frac = all_ones) then frac
     else Word.succ frac
   | `Down -> frac
+
+let round' rm sign x loss =
+  let frac = round rm sign x.frac loss in
+  {x with frac}
 
 (* return None if number doesn't fit into [precs]  *)
 let pow ~base ~precs n =
@@ -400,7 +412,7 @@ let balance base x y =
   | _ -> minimize_exponent base x, minimize_exponent base y
 
 (*  TODO:
-    is it guaranteed that common_ground returns a correct values,
+    is it guaranteed that common_ground returns a correct values??
     i.e. with an equal exponent. Because safe_align stops in
     case max exponent achieved *)
 let common_ground ?(subtract=false) base x y =
@@ -428,6 +440,9 @@ let check_operands a b =
 
 let neg x = {x with sign = revert_sign x.sign}
 
+let extend x addend = { x with frac = Word.(concat (zero addend) x.frac) }
+let extract prec frac = Word.extract_exn ~hi:(prec - 1) frac
+
 let add rm a b =
   check_operands a b;
   match a.value, b.value with
@@ -438,16 +453,14 @@ let add rm a b =
       if Word.(frac >= x.frac) then
         Fin (norm a.base {expn=x.expn; frac=round rm Pos frac loss})
       else
-        let width = Word.bitwidth x.frac in
-        let extend = Word.zero width in
-        let xfrac = Word.concat extend x.frac in
-        let yfrac = Word.concat extend y.frac in
-        let frac = Word.(xfrac + yfrac) in
-        match align_right a.base width x.expn frac with
+        let x = extend x a.prec in
+        let y = extend y a.prec in
+        let frac = Word.(x.frac + y.frac) in
+        match align_right a.base a.prec x.expn frac with
         | None -> Inf
         | Some (expn, frac, loss') ->
           let loss = combine_loss loss' loss in
-          let frac = Word.extract_exn ~hi:(width - 1) frac in
+          let frac = extract a.prec frac in
           let frac = round rm Pos frac loss in
           Fin (norm a.base {expn; frac}) in
     { a with value }
@@ -458,17 +471,69 @@ let add rm a b =
   | Inf, _ -> a
   | _, Inf -> b
 
+
+let common_ground2 ?(subtract=false) base x y =
+  (* let x,y = balance base x y in *)
+  let expn = Word.max x.expn y.expn in
+  if Word.(x.expn > y.expn) then
+    let () = printf "case 1\n" in
+    let y, loss = rshift base y Word.(expn - y.expn - b1) in
+    let x = lshift base x 1 in
+    x, y, loss, false
+  else if Word.(x.expn < y.expn) then
+    let () = printf "case 2\n" in
+    let y = lshift base y 1 in
+    let x,loss = rshift base x Word.(expn - x.expn - b1) in
+    x,y,loss, true
+  else
+    x,y, ExactlyZero, Word.(x.frac < y.frac)
+
+let common_ground3 ?(subtract=false) base x y =
+  let expn = Word.max x.expn y.expn in
+  if Word.(x.expn > y.expn) then
+    let y, loss = rshift base y Word.(expn - y.expn) in
+    x, y, loss, false
+  else if Word.(x.expn < y.expn) then
+    let x,loss = rshift base x Word.(expn - x.expn) in
+    x,y,loss, true
+  else
+    x,y, ExactlyZero, Word.(x.frac < y.frac)
+
 let sub rm a b =
   check_operands a b;
   match a.value, b.value with
   | Fin x, Fin y ->
-    let x,y,loss = common_ground ~subtract:true a.base x y in
-    let sign, frac =
-      if Word.(x.frac < y.frac) then
-        revert_sign a.sign, Word.(y.frac - x.frac)
-      else a.sign, Word.(x.frac - y.frac) in
-    let frac = round rm sign frac loss in
-    let value = Fin (norm a.base {expn=x.expn; frac}) in
+    let x = minimize_exponent a.base x in
+    let y = minimize_exponent a.base y in
+    let x = extend x 1 in
+    let y = extend y 1 in
+    pr_xy "\ninput" a.base x y;
+    let x,y,loss,reverse = common_ground2 ~subtract:true a.base x y in
+    let loss = invert_loss loss in
+    let borrow = loss <> ExactlyZero in
+    pr_xy "common"  a.base x y;
+    printf "borrow? %b, reverse? %b, loss: %s\n" borrow reverse (string_of_loss loss);
+    let borrow = if loss = ExactlyZero then Word.b0 else Word.b1 in
+    let frac = if reverse then Word.(y.frac - x.frac - borrow)
+      else Word.(x.frac - y.frac - borrow) in
+    printf "%s <-- exactly subtracted\n" (sb frac);
+    let sign = if reverse then revert_sign a.sign else a.sign in
+    printf "before rounding %s %s\n" (sb frac) (string_of_loss loss);
+
+    let aa = match
+        align_right ~base:a.base ~precision:a.prec x.expn frac with
+    | None -> printf "will do it one day. TODO!\n"
+    | Some (expn, frac, loss') ->
+
+      printf "maybe frac is %s\n" (sb frac) in
+      (* let loss = combine_loss loss' loss in *)
+
+    (* let frac = round rm sign frac loss in *)
+    (* let value = {expn=x.expn; frac} in *)
+    let value = minimize_exponent a.base {expn=x.expn; frac} in
+    let value = round' rm sign value loss in
+    printf "after  rounding %s\n" (sb value.frac);
+    let value = Fin value in
     {a with value; sign}
   | Nan _, _ -> a
   | _, Nan _ -> b
@@ -601,7 +666,7 @@ let div ?(rm=Nearest_even) a b =
       dif xfrac yfrac expn one in
   check_operands a b;
   match a.value,b.value with
-  | Fin x, Fin y when is_zero a && is_zero b -> mk_nan ~base:a.base a.prec
+  | Fin x, Fin y when is_zero a && is_zero b -> mk_nan ~sign:Neg ~base:a.base a.prec
   | Fin x, Fin y when is_zero b -> {a with value = Inf}
   | Fin x, Fin y ->
     let x = minimize_exponent a.base x in

@@ -127,7 +127,14 @@ let float_of_double t =
   let bits = Word.signed bits |> Word.to_int64_exn in
   Int64.float_of_bits bits
 
-let max_of_precision p = int_of_float (2.0 ** float_of_int p)
+let pow ~radix n =
+  let rec run r m =
+    if m < n then run (r * radix) (m + 1)
+    else r in
+  if n = 0 then 1
+  else run radix 1
+
+let max_of_precision p = pow ~radix:2 p
 
 let truncate_zeros x =
   match String.index x '.' with
@@ -141,8 +148,14 @@ let rec truncate max_int expn x =
     truncate max_int (expn + 1)
       (String.subo ~len:(String.length x - 1) x)
 
-let decimal_precision = 53
+let decimal_precision = 20
 let decimal_expn_bits = 10
+
+let log2 x = Float.log10 x /. Float.log10 2.0
+
+(* return max bits required for encodind [n] decimal digits  *)
+let bits_of_digits n =
+  int_of_float (Float.round_up (float n *. log2 10.0))
 
 let decimal_of_string = function
   | "nan" -> mk_nan ~base:10 decimal_precision
@@ -157,11 +170,13 @@ let decimal_of_string = function
       else 0, p in
     let base = String.subo ~pos:start ~len:(point - start) x in
     let remd = String.subo ~pos:(point + 1) x in
-    let precision = decimal_precision in
-    let max_int = max_of_precision precision in
     let expn = - (String.length remd) in
-    let expn, int_part = truncate max_int expn (base ^ remd) in
-    let frac = Word.of_int ~width:precision int_part in
+    let frac = base ^ remd in
+    let bits = bits_of_digits (String.length frac) in
+    printf "bits: %d\n" bits;
+
+    let len = sprintf ":%du" (bits_of_digits (String.length frac)) in
+    let frac = Word.of_string (frac ^ len) in
     let sign = if is_neg then Neg else Pos in
     let expn = Word.of_int ~width:decimal_expn_bits expn in
     mk ~base:10 sign expn frac
@@ -179,32 +194,42 @@ let attach_sign x = function
   | Pos -> x
   | Neg -> ~-. x
 
-let float_of_decimal t = match t.value with
-  | Fin {expn;frac} ->
+let string_of_decimal t =
+  let attach_sign x = match t.sign with
+    | Pos -> x
+    | Neg -> "-" ^ x in
+  match t.value with
+  | Fin {expn; frac} ->
     let expn = Word.to_int_exn (Word.signed expn) in
     let frac = wdec frac in
     let len = String.length frac in
-    let frac =
-      if expn = 0 then frac
-      else if expn < 0 && expn < -len then
-        let zeros = String.init (abs expn - len + 1) ~f:(fun _ -> '0') in
-        let frac = zeros ^ frac in
-        insert_point frac (String.length frac - abs expn)
-      else if expn < 0 then
-        insert_point frac (len - abs expn)
-      else if expn > 0 && expn > len then
-        let zeros = String.init (expn - len) ~f:(fun _ -> '0') in
-        let frac = zeros ^ frac in
-        insert_point frac expn
-      else
-        let zeros = String.init expn ~f:(fun _ -> '0') in
-        let frac = frac ^ zeros in
-        insert_point frac (len + expn) in
-    let frac = float_of_string frac in
-    if t.sign = Neg then ~-. frac
-    else frac
-  | Inf   -> attach_sign Float.infinity t.sign
-  | Nan _ -> attach_sign Float.nan t.sign
+    if expn = 0 then frac
+    else if expn < 0 && abs expn > len then
+      let zeros = String.init (abs expn - len + 1) ~f:(fun _ -> '0') in
+      let frac = zeros ^ frac in
+      insert_point frac (String.length frac - abs expn)
+    else if expn < 0 then
+      insert_point frac (len - abs expn)
+    else if expn > 0 && expn > len then
+      let zeros = String.init (expn - len) ~f:(fun _ -> '0') in
+      let frac = zeros ^ frac in
+      insert_point frac expn
+    else
+      let zeros = String.init expn ~f:(fun _ -> '0') in
+      let frac = frac ^ zeros in
+      insert_point frac (len + expn)
+  | Inf   -> attach_sign "inf"
+  | Nan _ -> attach_sign "nan"
+
+let float_of_decimal x = float_of_string (string_of_decimal x)
+
+let xs = "9.423424255353534543"
+let ys = "1003.923627544745493"
+let x = decimal_of_string xs
+let y = decimal_of_string ys
+let z = float_of_decimal (add x y)
+let r = sprintf "%.21f" (float_of_string xs +. float_of_string ys)
+let () = printf "%.21f\n%s\n" z r
 
 let hexadecimal_of_string x =
   let x = truncate_zeros x in
@@ -296,21 +321,35 @@ let nan = Float.nan
 let inf = Float.infinity
 let ninf = Float.neg_infinity
 
+(* TODO: bit equality desired! *)
+let equal_base2 x y =
+  let x = Int64.bits_of_float x in
+  let y = Int64.bits_of_float y in
+  Int64.equal x y
+
 module Run_test(F : T) = struct
+
+  let run2 = true
+  let run10 = false
 
   let binop op op' x y ctxt =
     let real = op x y in
-    let r2 = base2_binop op' x y in
-    let r10 = base10_binop op' x y in
-    assert_equal ~ctxt ~cmp real r2;
-    assert_equal ~ctxt ~cmp real r10
+    let () =
+      if run2 then
+        let r2 = base2_binop op' x y in
+        assert_equal ~ctxt ~cmp real r2 in
+    if run10 then
+      let r10 = base10_binop op' x y in
+      assert_equal ~ctxt ~cmp real r10
 
   let unop op op' x ctxt =
     let real = op x in
-    let r2 = base2_unop op' x in
-    let r10 = base10_unop op' x in
-    assert_equal ~ctxt ~cmp real r2;
-    assert_equal ~ctxt ~cmp real r10
+    let () = if run2 then
+        let r2 = base2_unop op' x in
+        assert_equal ~ctxt ~cmp real r2 in
+    if run10 then
+      let r10 = base10_unop op' x in
+      assert_equal ~ctxt ~cmp real r10
 
   let add x y ctxt = binop (+.) add x y ctxt
   let sub x y ctxt = binop (-.) sub x y ctxt
@@ -432,6 +471,7 @@ end
 module Run_manually(F : T) = struct
 
   let str_of_float x = sprintf "%.15f" x
+  let str_of_float f = sprintf "%.16h" f
 
   let unop2 opstr op op' x =
     let real = op x in
@@ -439,8 +479,9 @@ module Run_manually(F : T) = struct
     let real_str = str_of_float real in
     let res_str = str_of_float res in
     if not (String.equal real_str res_str) then
-      printf "FAIL: base 2, %s %f, real %s <> %s\n"
-        opstr x real_str res_str
+      printf "FAIL: base 2, %s %f <> %f, real %s <> %s\n"
+        opstr x res real_str res_str
+    else printf "OK!\n"
 
   let unop10 opstr op op' x =
     let real = op x in
@@ -448,23 +489,32 @@ module Run_manually(F : T) = struct
     let real_str = str_of_float real in
     let res_str = str_of_float res in
     if not (String.equal real_str res_str) then
-      printf "FAIL: base 10, %s %f, real %s <> %s\n"
-        opstr x real_str res_str
+      printf "FAIL: base 10, %s %f <> %f, real %s <> %s\n"
+        opstr x res real_str res_str
+    else printf "OK!\n"
 
-  let unop opstr op op' x =
-    let _ = [
-      unop2 opstr op op' x;
-      unop10 opstr op op' x;
-    ] in ()
+  let fraction_of_float x =
+    let bits = Word.of_int64 (Int64.bits_of_float x) in
+    let frac = Word.extract_exn ~hi:51 bits in
+    string_of_bits frac
+
+  let bitstring_of_float x =
+    let x = Int64.bits_of_float x |> Word.of_int64 in
+    sb64 x
 
   let binop2 opstr op op' x y =
     let real = op x y in
     let res = base2_binop op' x y in
+    let bs = bitstring_of_float in
+    printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
+      (bs real) real (bs res);
+
     let real_str = str_of_float real in
     let res_str = str_of_float res in
     if not (String.equal real_str res_str) then
-      printf "FAIL: base 2, %f %s %f, real %s <> %s\n"
-        x opstr y real_str res_str
+      printf "FAIL: base 2, %f %s %f <> %f, real %s <> %s\n"
+        x opstr y res real_str res_str
+    else printf "OK!\n"
 
   let binop10 opstr op op' x y =
     let real = op x y in
@@ -472,14 +522,24 @@ module Run_manually(F : T) = struct
     let real_str = str_of_float real in
     let res_str = str_of_float res in
     if not (String.equal real_str res_str) then
-      printf "FAIL: base 10, %f %s %f, real %s <> %s\n"
-        x opstr y real_str res_str
+      printf "FAIL: base 10, %f %s %f <> %f, real %s <> %s\n"
+        x opstr y res real_str res_str
+    else printf "OK!\n"
+
+  let run2 = true
+  let run10 = false
+
+  let unop opstr op op' x =
+    if run2 then
+      unop2 opstr op op' x;
+    if run10 then
+      unop10 opstr op op' x
 
   let binop opstr op op' x y =
-    let _ = [
+    if run2 then
       binop2 opstr op op' x y;
-      (* binop10 opstr op op' x y; *)
-    ] in ()
+    if run10 then
+      binop10 opstr op op' x y
 
   let add x y = binop "+" (+.) add x y
   let sub x y = binop "-" (-.) sub x y
@@ -487,15 +547,23 @@ module Run_manually(F : T) = struct
   let div x y = binop "/" ( /. ) div x y
   let sqrt x = unop "sqrt" Float.sqrt sqrt x
 
+  let neg x = ~-. x
   let (+) = add
   let (-) = sub
   let ( * ) = mul
   let ( / ) = div
   let ( sqrt ) = sqrt
 
-  let () = 4.2 - 2.28
-
+  (* let () = 4.2 - 2.28 *)
+  (* let () = (neg 2.2) + 4.8 *)
+  let () = 0.01 - 0.0002
+  (* let () = 0.0000001 - 0.00000002 *)
 end
 
-(* module Run = Run_test(struct type t = unit end) *)
-module Run = Run_manually(struct type t = unit end)
+(* module Run1 = Run_test(struct type t = unit end) *)
+(* module Run2 = Run_manually(struct type t = unit end) *)
+
+(* let () = *)
+(*   let x = 0.0002 in *)
+(*   let bits = Word.of_int64 (Int64.bits_of_float x) in *)
+(*   printf "test %f %s\n" x (sb64 bits) *)
