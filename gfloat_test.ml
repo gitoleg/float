@@ -130,15 +130,6 @@ let float_of_double t =
   let bits = Word.signed bits |> Word.to_int64_exn in
   Int64.float_of_bits bits
 
-let pow ~radix n =
-  let rec run r m =
-    if m < n then run (r * radix) (m + 1)
-    else r in
-  if n = 0 then 1
-  else run radix 1
-
-let max_of_precision p = pow ~radix:2 p
-
 let truncate_zeros x =
   match String.index x '.' with
   | None -> x
@@ -209,6 +200,7 @@ let insert_point str expn =
           else c :: acc) |> List.rev |> String.of_char_list in
   let len = String.length str in
   if expn = 0 then str
+  else if is_zero_float str then "0.0"
   else if expn < 0 && abs expn > len then
     let zeros = String.init (abs expn - len + 1) ~f:(fun _ -> '0') in
     let str = zeros ^ str in
@@ -239,56 +231,35 @@ let truncate str =
   let expn = - (String.length remd) in
   check_int_part base;
   let bits = actual_bits (base ^ remd) in
-  if bits = 0 then str, expn
+  if bits = 0 then is_neg, str, expn
   else
     let frac = Word.of_string (sprintf "%s%s:%du" base remd bits) in
     let frac,expn = adjust_base10 frac expn decimal_precision in
     let frac = Word.extract_exn ~hi:(decimal_precision - 1) frac in
-    Word.string_of_value ~hex:false frac, expn
+    is_neg, Word.string_of_value ~hex:false frac, expn
 
 let decimal_of_string = function
   | "nan" -> mk_nan ~base:10 decimal_precision
   | "inf" -> mk_inf ~base:10 decimal_precision Pos
   | "-inf" -> mk_inf ~base:10 decimal_precision Neg
   | str ->
-    let frac,expn = truncate str in
-    let is_neg = List.hd_exn (String.to_list str) = '-' in
+    let is_neg, frac,expn = truncate str in
     let sign = if is_neg then Neg else Pos in
     if is_zero_float frac then
       mk ~base:10 sign
-        (Word.zero decimal_expn_bits) (Word.zero decimal_precision)
+        (Word.zero decimal_expn_bits)
+        (Word.zero decimal_precision)
     else
       let frac = Word.of_string (sprintf "%s:%du" frac decimal_precision) in
       let expn = Word.of_int ~width:decimal_expn_bits expn in
       mk ~base:10 sign expn frac
 
 let truncate_float f =
-  let x,e = truncate (str_of_float f) in
-  float_of_string (insert_point x e)
+  let is_neg, x,e = truncate (str_of_float f) in
+  let x = float_of_string (insert_point x e) in
+  if is_neg then ~-. x
+  else x
 
-
-(*
-    let x = truncate_zeros str in
-    let is_neg = List.hd_exn (String.to_list x) = '-' in
-    let sign = if is_neg then Neg else Pos in
-    let start, point =
-      let p = String.index_exn x '.' in
-      if is_neg then 1, p
-      else 0, p in
-    let base = String.subo ~pos:start ~len:(point - start) x in
-    let remd = String.subo ~pos:(point + 1) x in
-    let expn = - (String.length remd) in
-    check_int_part base;
-    let bits = actual_bits (base ^ remd) in
-    if bits = 0 then
-      mk ~base:10 sign (Word.zero decimal_expn_bits) (Word.zero decimal_precision)
-    else
-      let frac = Word.of_string (sprintf "%s%s:%du" base remd bits) in
-      let frac,expn = adjust_base10 frac expn decimal_precision in
-      let frac = Word.extract_exn ~hi:(decimal_precision - 1) frac in
-      let expn = Word.of_int ~width:decimal_expn_bits expn in
-      mk ~base:10 sign expn frac
-*)
 let decimal_of_float x = decimal_of_string (str_of_float x)
 
 let attach_sign x = function
@@ -303,7 +274,7 @@ let string_of_decimal t =
   | Fin {expn; frac} ->
     let expn = Word.to_int_exn (Word.signed expn) in
     let frac = wdec frac in
-    insert_point frac expn
+    insert_point frac expn |> attach_sign
   | Inf   -> attach_sign "inf"
   | Nan _ -> attach_sign "nan"
 
@@ -363,9 +334,26 @@ let equal_base2 x y =
   let y = Int64.bits_of_float y in
   Int64.equal x y
 
+let string_equal real ours =
+  let len = String.length ours in
+  let f x =
+    match String.index x '.' with
+    | None -> x
+    | Some i when i < len - 2 ->
+      String.subo ~len:(len - 1) x
+    | _ ->
+      String.subo ~len:len  x in
+  String.equal (f real) (f ours)
+
+let string_equal' real ours =
+  let real_plus = real +. Float.epsilon_float |> str_of_float in
+  let real_mins = real -. Float.epsilon_float |> str_of_float in
+  string_equal real_plus ours ||
+  string_equal real_mins ours
+
 let equal_base10 real ours =
-  let real = String.subo ~len:(String.length ours) real in
-  String.equal real ours
+  string_equal (str_of_float real) ours ||
+  string_equal' real ours
 
 module Run_test(F : T) = struct
 
@@ -378,25 +366,55 @@ module Run_test(F : T) = struct
     Int64.equal x y
 
   let binop op op' x y ctxt =
-    let real = op x y in
     let () =
       if run2 then
+        let real = op x y in
         let r2 = base2_binop op' x y in
         assert_equal ~ctxt ~cmp:cmp_base2 real r2 in
     if run10 then
+      let x = truncate_float x in
+      let y = truncate_float y in
+      let real = op x y in
       let r10 = base10_binop op' x y in
-      let real = str_of_float real in
-      assert_equal ~ctxt ~cmp:equal_base10 real r10
+      let equal = equal_base10 real r10 in
+      assert_bool "binop base 10 failed" equal
+
+  let binop_special op op' x y ctxt =
+    let real = str_of_float (op x y) in
+    let () =
+      if run2 then
+        let r2 = str_of_float (base2_binop op' x y) in
+        assert_equal ~ctxt ~cmp:String.equal real r2 in
+    if run10 then
+      let r10 = base10_binop op' x y in
+      assert_equal ~ctxt ~cmp:String.equal real r10
 
   let unop op op' x ctxt =
-    let real = op x in
     let () = if run2 then
+        let real = op x in
         let r2 = base2_unop op' x in
         assert_equal ~ctxt ~cmp:cmp_base2 real r2 in
     if run10 then
+      let x = truncate_float x in
+      let real = op x in
       let r10 = base10_unop op' x in
-      let real = str_of_float real in
-      assert_equal ~ctxt ~cmp:equal_base10 real r10
+      let equal = equal_base10 real r10 in
+      assert_bool "unop base 10 failed" equal
+
+  let unop_special op op' x ctxt =
+    let real = str_of_float (op x) in
+    let () = if run2 then
+        let r2 = str_of_float @@ base2_unop op' x in
+        assert_equal ~ctxt ~cmp:String.equal real r2 in
+    if run10 then
+      let r10 = base10_unop op' x in
+      assert_equal ~ctxt ~cmp:String.equal real r10
+
+  let add_special x y ctxt = binop_special (+.) add x y ctxt
+  let sub_special x y ctxt = binop_special (-.) sub x y ctxt
+  let mul_special x y ctxt = binop_special ( *. ) mul x y ctxt
+  let div_special x y ctxt = binop_special ( /. ) div x y ctxt
+  let sqrt_special x ctxt = unop_special Float.sqrt sqrt x ctxt
 
   let add x y ctxt = binop (+.) add x y ctxt
   let sub x y ctxt = binop (-.) sub x y ctxt
@@ -410,54 +428,60 @@ module Run_test(F : T) = struct
   let ( / ) = div
   let ( sqrt ) = sqrt
 
+  let (+$) = add_special
+  let (-$) = sub_special
+  let ( *$ ) = mul_special
+  let ( /$ ) = div_special
+
+
   let suite () =
     let neg x = ~-.x in
     "Gfloat test" >::: [
 
       (* special cases, string compare  *)
-      "nan  + nan"  >:: nan  + nan;
-      "inf  + inf"  >:: inf  + inf;
-      "-inf + -inf" >:: ninf + ninf;
-      "nan  + -inf" >:: nan  + ninf;
-      "-inf + nan"  >:: ninf + nan;
-      "nan  + inf"  >:: nan  + inf;
-      "inf  + nan"  >:: inf  + nan;
-      "-inf + inf"  >:: ninf + inf;
-      "inf  + -inf" >:: inf  + ninf;
+      "nan  + nan"  >:: nan  +$ nan;
+      "inf  + inf"  >:: inf  +$ inf;
+      "-inf + -inf" >:: ninf +$ ninf;
+      "nan  + -inf" >:: nan  +$ ninf;
+      "-inf + nan"  >:: ninf +$ nan;
+      "nan  + inf"  >:: nan  +$ inf;
+      "inf  + nan"  >:: inf  +$ nan;
+      "-inf + inf"  >:: ninf +$ inf;
+      "inf  + -inf" >:: inf  +$ ninf;
 
-      "nan  - nan"  >:: nan  - nan;
-      "inf  - inf"  >:: inf  - inf;
-      "-inf - -inf" >:: ninf - ninf;
-      "nan  - -inf" >:: nan  - ninf;
-      "-inf - nan"  >:: ninf - nan;
-      "nan  - inf"  >:: nan  - inf;
-      "inf  - nan"  >:: inf  - nan;
-      "-inf - inf"  >:: ninf - inf;
-      "inf  - -inf" >:: inf  - ninf;
+      "nan  - nan"  >:: nan  -$ nan;
+      "inf  - inf"  >:: inf  -$ inf;
+      "-inf - -inf" >:: ninf -$ ninf;
+      "nan  - -inf" >:: nan  -$ ninf;
+      "-inf - nan"  >:: ninf -$ nan;
+      "nan  - inf"  >:: nan  -$ inf;
+      "inf  - nan"  >:: inf  -$ nan;
+      "-inf - inf"  >:: ninf -$ inf;
+      "inf  - -inf" >:: inf  -$ ninf;
 
-      "nan  * nan"  >:: nan  * nan;
-      "inf  * inf"  >:: inf  * inf;
-      "-inf * -inf" >:: ninf * ninf;
-      "nan  * -inf" >:: nan  * ninf;
-      "-inf * nan"  >:: ninf * nan;
-      "nan  * inf"  >:: nan  * inf;
-      "inf  * nan"  >:: inf  * nan;
-      "-inf * inf"  >:: ninf * inf;
-      "inf  * -inf" >:: inf  * ninf;
+      "nan  * nan"  >:: nan  *$ nan;
+      "inf  * inf"  >:: inf  *$ inf;
+      "-inf * -inf" >:: ninf *$ ninf;
+      "nan  * -inf" >:: nan  *$ ninf;
+      "-inf * nan"  >:: ninf *$ nan;
+      "nan  * inf"  >:: nan  *$ inf;
+      "inf  * nan"  >:: inf  *$ nan;
+      "-inf * inf"  >:: ninf *$ inf;
+      "inf  * -inf" >:: inf  *$ ninf;
 
-      "nan  / nan"  >:: nan  / nan;
-      "inf  / inf"  >:: inf  / inf;
-      "-inf / -inf" >:: ninf / ninf;
-      "nan  / -inf" >:: nan  / ninf;
-      "-inf / nan"  >:: ninf / nan;
-      "nan  / inf"  >:: nan  / inf;
-      "inf  / nan"  >:: inf  / nan;
-      "-inf / inf"  >:: ninf / inf;
-      "inf  / -inf" >:: inf  / ninf;
+      "nan  / nan"  >:: nan  /$ nan;
+      "inf  / inf"  >:: inf  /$ inf;
+      "-inf / -inf" >:: ninf /$ ninf;
+      "nan  / -inf" >:: nan  /$ ninf;
+      "-inf / nan"  >:: ninf /$ nan;
+      "nan  / inf"  >:: nan  /$ inf;
+      "inf  / nan"  >:: inf  /$ nan;
+      "-inf / inf"  >:: ninf /$ inf;
+      "inf  / -inf" >:: inf  /$ ninf;
 
-      "sqrt nan"    >:: sqrt nan;
-      "sqrt inf"    >:: sqrt inf;
-      "sqrt -inf"   >:: sqrt ninf;
+      "sqrt nan"    >:: sqrt_special nan;
+      "sqrt inf"    >:: sqrt_special inf;
+      "sqrt -inf"   >:: sqrt_special ninf;
 
       (* add *)
       "4.2 + 2.3"   >:: 4.2 + 2.3;
@@ -497,7 +521,7 @@ module Run_test(F : T) = struct
       "1.0 / 3.0"  >:: 1.0 / 3.0;
       "3.0 / 32.0" >:: 3.0 / 32.0;
       "42.3 / 0.0" >:: 42.3 / 0.0;
-      "0.0 / 0.0"  >:: 0.0 / 0.0;
+      "0.0 / 0.0"  >:: 0.0 /$ 0.0;
       "324.32423 / 1.2" >:: 324.32423 / 1.2;
       "2.4 / 3.123131"  >:: 2.4 / 3.123131;
       "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
@@ -511,7 +535,7 @@ module Run_test(F : T) = struct
       "sqrt 2.0"      >:: sqrt 2.0;
       "sqrt 3.0"      >:: sqrt 3.0;
       "sqrt 20.0"     >:: sqrt 20.0;
-      "sqrt (-1)"     >:: sqrt (neg 1.0);
+      "sqrt (-1)"     >:: sqrt_special (neg 1.0);
     ]
 
   let () = run_test_tt_main (suite ())
@@ -541,10 +565,8 @@ module Run_manually(F : T) = struct
     let x = truncate_float x in
     let real = op x in
     let res = base10_unop op' x in
-    let real_str = str_of_float real in
-    if not (equal_base10 real_str res) then
-      let real = String.subo ~len:(String.length res) real_str in
-      printf "FAIL: base 10, %s %f <> %s (%s expected)\n"
+    if not (equal_base10 real res) then
+      printf "FAIL: base 10, %s %f <> %s (%f expected)\n"
         opstr x res real
     else printf "OK!\n"
 
@@ -561,17 +583,13 @@ module Run_manually(F : T) = struct
         x opstr y res real_str res_str
     else printf "OK!\n"
 
-  let base10_binop = gen_binop decimal_of_float string_of_decimal
-
   let binop10 opstr op op' x y =
     let x = truncate_float x in
     let y = truncate_float y in
     let real = op x y in
     let res = base10_binop op' x y in
-    let real_str = str_of_float real in
-    if not (equal_base10 real_str res) then
-      let real = String.subo ~len:(String.length res) real_str in
-      printf "FAIL: base 10, %f %s %f <> %s (%s expected)\n"
+    if not (equal_base10 real res) then
+      printf "FAIL: base 10, %f %s %f <> %s (%.16f expected)\n"
         x opstr y res real
     else printf "OK!\n"
 
@@ -603,31 +621,38 @@ module Run_manually(F : T) = struct
   let ( / ) = div
   let ( sqrt ) = sqrt
 
+  let () = 0.0 - 0.00000001
 
+  let () = 4.2 + 2.3
+  let () = (neg 2.2) - (neg 2.46)
+
+  let () = 4.2 - 4.2
+  let () = 2.0 * 0.5
+  let () = 1.0 * (neg 0.5)
   let () = 2.4 / 3.123131
 
-  (* let () = 324.32423 / 1.2 *)
-  (* let () = 1.0 / 0.0 *)
-  (* let () = 2.0 / 0.5 *)
-  (* let () = 1.0 / 3.0 *)
-  (* let () = 3.0 / 32.0 *)
-  (* let () = 42.3 / 0.0 *)
-  (* let () = 0.0 / 0.0 *)
-  (* let () = 324.32423 / 1.2 *)
-  (* let () = 2.4 / 3.123131 *)
-  (* let () = 0.1313134 / 0.578465631 *)
+  let () = 324.32423 / 1.2
+  let () = 1.0 / 0.0
+  let () = 2.0 / 0.5
+  let () = 1.0 / 3.0
+  let () = 3.0 / 32.0
+  let () = 42.3 / 0.0
+  let () = 0.0 / 0.0
+  let () = 324.32423 / 1.2
+  let () = 2.4 / 3.123131
+  let () = 0.1313134 / 0.578465631
 
-  (* let () = sqrt 423245.0 *)
-  (* let () = sqrt 0.213 *)
-  (* let () = sqrt 1.2356 *)
-  (* let () = sqrt 0.0 *)
-  (* let () = sqrt 1.0 *)
-  (* let () = sqrt 2.0 *)
-  (* let () = sqrt 3.0 *)
-  (* let () = sqrt 20.0 *)
-  (* let () = sqrt (neg 1.0) *)
+  let () = sqrt 423245.0
+  let () = sqrt 0.213
+  let () = sqrt 1.2356
+  let () = sqrt 0.0
+  let () = sqrt 1.0
+  let () = sqrt 2.0
+  let () = sqrt 3.0
+  let () = sqrt 20.0
+  let () = sqrt (neg 1.0)
 
 end
 
-(* module Run1 = Run_test(struct type t = unit end) *)
-module Run2 = Run_manually(struct type t = unit end)
+module Run1 = Run_test(struct type t = unit end)
+(* module Run2 = Run_manually(struct type t = unit end) *)

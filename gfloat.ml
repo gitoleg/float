@@ -300,7 +300,6 @@ let safe_align_right base expn frac =
     let e,f = run expn frac in
     Word.signed e, f
 
-(* TODO: check how comparison for min_expn is done *)
 let safe_align_left base expn frac =
   let min_expn =
     Word.of_int ~width:(bits_in expn) (min_exponent (bits_in expn)) in
@@ -337,11 +336,21 @@ let maximize_exponent base x =
 
 let norm = maximize_exponent
 
+let mk_zero ~base expn_width prec =
+  let min = min_exponent expn_width in
+  let expn = Word.of_int ~width:expn_width min in
+  let frac = Word.zero prec in
+  let value = {expn; frac} in
+  {sign = Pos; base; value = Fin value; prec }
+
 let mk ~base sign expn frac =
-  let expn = Word.signed expn in
-  let value = norm base {expn; frac} in
-  let prec = Word.bitwidth frac in
-  {sign; base; value = Fin value; prec }
+  if Word.is_zero frac then
+    mk_zero ~base (bits_in expn) (bits_in frac)
+  else
+    let expn = Word.signed expn in
+    let value = norm base {expn; frac} in
+    let prec = Word.bitwidth frac in
+    {sign; base; value = Fin value; prec }
 
 let mk_inf ~base prec sign = {sign; base; prec; value = Inf }
 
