@@ -345,9 +345,13 @@ let mk ~base sign expn frac =
 
 let mk_inf ~base prec sign = {sign; base; prec; value = Inf }
 
-(* mk nan with payload 1 *)
+(* mk nan with payload 0100..01 *)
 let mk_nan ?(signaling=false) ?(sign=Pos) ~base prec =
-  let value = Nan (signaling, Word.one prec) in
+  let payload = Word.one prec in
+  let shift = Word.of_int ~width:prec (prec - 2) in
+  let payload = Word.(payload lsl shift) in
+  let payload = Word.(payload + b1) in
+  let value = Nan (signaling, payload) in
   {sign; base; prec; value}
 
 let is_zero x = match x.value with
@@ -411,22 +415,6 @@ let balance base x y =
     x, maximize_exponent base y
   | _ -> minimize_exponent base x, minimize_exponent base y
 
-(*  TODO:
-    is it guaranteed that common_ground returns a correct values??
-    i.e. with an equal exponent. Because safe_align stops in
-    case max exponent achieved *)
-let common_ground ?(subtract=false) base x y =
-  let x,y = balance base x y in
-  let expn = Word.max x.expn y.expn in
-  if Word.(x.expn > y.expn) then
-    let y, loss = rshift base y Word.(expn - y.expn) in
-    let loss = if subtract then invert_loss loss else loss in
-    x, y, loss
-  else if Word.(x.expn < y.expn) then
-    let x,loss = rshift base x Word.(expn - x.expn) in
-    x,y,loss
-  else x,y, ExactlyZero
-
 let combine_loss more less =
   match more, less with
   | _, ExactlyZero -> more
@@ -439,11 +427,24 @@ let check_operands a b =
     failwith "attempting to operate with a differrent base/precision"
 
 let neg x = {x with sign = revert_sign x.sign}
-
 let extend x addend = { x with frac = Word.(concat (zero addend) x.frac) }
 let extract prec frac = Word.extract_exn ~hi:(prec - 1) frac
 
+(*  TODO:
+    is it guaranteed that common_ground returns a correct values??
+    i.e. with an equal exponent. Because safe_align stops in
+    case max exponent achieved *)
 let add rm a b =
+  let common_ground base x y =
+    let x,y = balance base x y in
+    let expn = Word.max x.expn y.expn in
+    if Word.(x.expn > y.expn) then
+      let y, loss = rshift base y Word.(expn - y.expn) in
+      x, y, loss
+    else if Word.(x.expn < y.expn) then
+      let x,loss = rshift base x Word.(expn - x.expn) in
+      x,y,loss
+    else x,y, ExactlyZero in
   check_operands a b;
   match a.value, b.value with
   | Fin x, Fin y ->
@@ -471,60 +472,40 @@ let add rm a b =
   | Inf, _ -> a
   | _, Inf -> b
 
-
-let common_ground2 ?(subtract=false) base x y =
-  (* let x,y = balance base x y in *)
-  let expn = Word.max x.expn y.expn in
-  if Word.(x.expn > y.expn) then
-    let () = printf "case 1\n" in
-    let y, loss = rshift base y Word.(expn - y.expn - b1) in
-    let x = lshift base x 1 in
-    x, y, loss, false
-  else if Word.(x.expn < y.expn) then
-    let () = printf "case 2\n" in
-    let y = lshift base y 1 in
-    let x,loss = rshift base x Word.(expn - x.expn - b1) in
-    x,y,loss, true
-  else
-    x,y, ExactlyZero, Word.(x.frac < y.frac)
-
-let common_ground3 ?(subtract=false) base x y =
-  let expn = Word.max x.expn y.expn in
-  if Word.(x.expn > y.expn) then
-    let y, loss = rshift base y Word.(expn - y.expn) in
-    x, y, loss, false
-  else if Word.(x.expn < y.expn) then
-    let x,loss = rshift base x Word.(expn - x.expn) in
-    x,y,loss, true
-  else
-    x,y, ExactlyZero, Word.(x.frac < y.frac)
-
 let sub rm a b =
+  let common_ground base x y =
+    let expn = Word.max x.expn y.expn in
+    if Word.(x.expn > y.expn) then
+      let y, loss = rshift base y Word.(expn - y.expn - b1) in
+      let x = lshift base x 1 in
+      x, y, loss, false
+    else if Word.(x.expn < y.expn) then
+      let y = lshift base y 1 in
+      let x,loss = rshift base x Word.(expn - x.expn - b1) in
+      x,y,loss, true
+    else
+      x,y, ExactlyZero, Word.(x.frac < y.frac) in
   check_operands a b;
   match a.value, b.value with
   | Fin x, Fin y ->
     let x = minimize_exponent a.base x in
     let y = minimize_exponent a.base y in
-    let x = extend x 1 in
-    let y = extend y 1 in
-    let x,y,loss,reverse = common_ground2 ~subtract:true a.base x y in
+    let x = extend x a.prec in
+    let y = extend y a.prec in
+    let x,y,loss,reverse = common_ground a.base x y in
     let loss = invert_loss loss in
     let borrow = if loss = ExactlyZero then Word.b0 else Word.b1 in
     let frac = if reverse then Word.(y.frac - x.frac - borrow)
       else Word.(x.frac - y.frac - borrow) in
     let sign = if reverse then revert_sign a.sign else a.sign in
-    begin
-    match
-        align_right ~base:a.base ~precision:a.prec x.expn frac with
-    | None -> failwith "will do it one day. TODO!\n"
-    | Some (expn, frac, loss') ->
-      let loss = combine_loss loss' loss in
-      let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
-      let frac = round rm sign frac loss in
-      let value = Fin {expn; frac} in
-      {a with value; sign}
-  end
-    | Nan _, _ -> a
+    let expn,frac,loss' =
+      align_right_exn ~base:a.base ~precision:a.prec x.expn frac in
+    let loss = combine_loss loss' loss in
+    let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
+    let frac = round rm sign frac loss in
+    let value = Fin {expn; frac} in
+    {a with value; sign}
+  | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf, Inf -> mk_nan ~sign:Neg ~base:a.base a.prec
   | Inf, _ -> a

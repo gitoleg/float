@@ -25,7 +25,8 @@ let deconstruct64 x =
   let w = Word.of_int64 (Int64.bits_of_float x) in
   let expn = Word.extract_exn ~hi:62 ~lo:52 w in
   let bias = Word.of_int ~width:11 1023 in
-  let expn = Word.(expn - bias) in
+  let expn = Word.(signed (expn - bias)) in
+  printf "expn %d\n" (wi expn);
   let frac = Word.extract_exn ~hi:51 w in
   printf "ocaml %f: unbiased expn %d, frac %s, total %s\n"
     x (wi expn) (string_of_bits frac) (string_of_bits64 w)
@@ -55,6 +56,9 @@ let t_of_bits {expn_width;bias;frac_width;int_bit} bits =
     mk_inf ~base:2 precs sign
   else if all_ones expn_bits then
     mk_nan ~base:2 precs
+  else if all_zeros expn_bits && all_zeros frac then
+    let expn = Word.of_int ~width:expn_width expn' in
+    mk ~base:2 sign expn (Word.concat Word.b0 frac)
   else
     let dexp = Word.bitwidth frac in
     let ibit = if all_zeros expn_bits && all_zeros frac then Word.b0
@@ -330,14 +334,19 @@ let equal_base2 x y =
 module Run_test(F : T) = struct
 
   let run2 = true
-  let run10 = false
+  let run10 = true
+
+  let cmp_base2 x y =
+    let x = Int64.bits_of_float x in
+    let y = Int64.bits_of_float y in
+    Int64.equal x y
 
   let binop op op' x y ctxt =
     let real = op x y in
     let () =
       if run2 then
         let r2 = base2_binop op' x y in
-        assert_equal ~ctxt ~cmp real r2 in
+        assert_equal ~ctxt ~cmp:cmp_base2 real r2 in
     if run10 then
       let r10 = base10_binop op' x y in
       assert_equal ~ctxt ~cmp real r10
@@ -346,7 +355,7 @@ module Run_test(F : T) = struct
     let real = op x in
     let () = if run2 then
         let r2 = base2_unop op' x in
-        assert_equal ~ctxt ~cmp real r2 in
+        assert_equal ~ctxt ~cmp:cmp_base2 real r2 in
     if run10 then
       let r10 = base10_unop op' x in
       assert_equal ~ctxt ~cmp real r10
@@ -367,7 +376,7 @@ module Run_test(F : T) = struct
     let neg x = ~-.x in
     "Gfloat test" >::: [
 
-      (* special cases  *)
+      (* special cases, string compare  *)
       "nan  + nan"  >:: nan  + nan;
       "inf  + inf"  >:: inf  + inf;
       "-inf + -inf" >:: ninf + ninf;
@@ -431,6 +440,9 @@ module Run_test(F : T) = struct
       "-2.2 - 2.46"   >:: (neg 2.2) - 2.46;
       "-2.2 - -2.46)" >:: (neg 2.2) - (neg 2.46);
       "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
+      "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
+      "0.0 - 0.0"   >:: 0.0 - 0.0;
+      "4.2 - 4.2"   >:: 4.2 - 4.2;
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -473,12 +485,24 @@ module Run_manually(F : T) = struct
   let str_of_float x = sprintf "%.15f" x
   let str_of_float f = sprintf "%.16h" f
 
+  let fraction_of_float x =
+    let bits = Word.of_int64 (Int64.bits_of_float x) in
+    let frac = Word.extract_exn ~hi:51 bits in
+    string_of_bits frac
+
+  let bitstring_of_float x =
+    let x = Int64.bits_of_float x |> Word.of_int64 in
+    sb64 x
+
   let unop2 opstr op op' x =
     let real = op x in
     let res = base2_unop op' x in
     let real_str = str_of_float real in
     let res_str = str_of_float res in
-    if not (String.equal real_str res_str) then
+    if not (equal_base2 real res) then
+      let bs = bitstring_of_float in
+      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
+          (bs real) real (bs res) in
       printf "FAIL: base 2, %s %f <> %f, real %s <> %s\n"
         opstr x res real_str res_str
     else printf "OK!\n"
@@ -493,25 +517,15 @@ module Run_manually(F : T) = struct
         opstr x res real_str res_str
     else printf "OK!\n"
 
-  let fraction_of_float x =
-    let bits = Word.of_int64 (Int64.bits_of_float x) in
-    let frac = Word.extract_exn ~hi:51 bits in
-    string_of_bits frac
-
-  let bitstring_of_float x =
-    let x = Int64.bits_of_float x |> Word.of_int64 in
-    sb64 x
-
   let binop2 opstr op op' x y =
     let real = op x y in
     let res = base2_binop op' x y in
     let bs = bitstring_of_float in
-    printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
-      (bs real) real (bs res);
-
-    let real_str = str_of_float real in
-    let res_str = str_of_float res in
-    if not (String.equal real_str res_str) then
+    if not (equal_base2 real res) then
+      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
+          (bs real) real (bs res) in
+      let real_str = str_of_float real in
+      let res_str = str_of_float res in
       printf "FAIL: base 2, %f %s %f <> %f, real %s <> %s\n"
         x opstr y res real_str res_str
     else printf "OK!\n"
@@ -558,12 +572,28 @@ module Run_manually(F : T) = struct
   let () = (neg 2.2) + 4.8
   let () = 0.01 - 0.0002
   let () = 0.0000001 - 0.00000002
+  let () = 4.2 + 2.28
+  let () = 4.2 + 2.3
+  let () = 4.2 + 2.98
+  let () = 2.2 + 4.28
+  let () = 2.2 + (neg 4.28)
+  let () = (neg 2.2) + 4.28
+  let () = 2.2 + 2.46
+  let () = 4.2 + 2.98
+  let () = 0.0000001 + 0.00000002
+
+  let () =  sqrt 423245.0
+  let () =  sqrt 0.213
+  let () =  sqrt 1.2356
+  let () =  sqrt 0.0
+  let () =  sqrt 1.0
+  let () =  sqrt 2.0
+  let () =  sqrt 3.0
+  let () =  sqrt 20.0
+  let () =  sqrt (neg 1.0)
+
+
 end
 
-(* module Run1 = Run_test(struct type t = unit end) *)
-module Run2 = Run_manually(struct type t = unit end)
-
-(* let () = *)
-(*   let x = 0.0002 in *)
-(*   let bits = Word.of_int64 (Int64.bits_of_float x) in *)
-(*   printf "test %f %s\n" x (sb64 bits) *)
+module Run1 = Run_test(struct type t = unit end)
+(* module Run2 = Run_manually(struct type t = unit end) *)
