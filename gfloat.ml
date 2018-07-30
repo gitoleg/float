@@ -1,10 +1,6 @@
 open Core_kernel
 open Bap.Std
 
-let ws = Word.to_string
-let wi = Word.to_int_exn
-let wdec = Word.string_of_value ~hex:false
-
 type sign = Pos | Neg [@@deriving sexp]
 
 type finite = {
@@ -57,6 +53,11 @@ let msb w =
   | Some (i,_) -> Some (Word.bitwidth w - i - 1)
 
 module Debug = struct
+
+  let ws = Word.to_string
+  let wi = Word.to_int_exn
+  let wdec = Word.string_of_value ~hex:false
+
   let string_of_bits w =
     let bits = enum_bits w in
     let (@@) = sprintf "%s%d" in
@@ -336,32 +337,49 @@ let maximize_exponent base x =
 
 let norm = maximize_exponent
 
-let mk_zero ~base expn_width prec =
-  let min = min_exponent expn_width in
-  let expn = Word.of_int ~width:expn_width min in
+let mk_zero ~base ~expn_bits prec =
+  let min = min_exponent expn_bits in
+  let expn = Word.of_int ~width:expn_bits min in
   let frac = Word.zero prec in
   let value = {expn; frac} in
   {sign = Pos; base; value = Fin value; prec }
 
-let mk ~base sign expn frac =
+let mk ~base ?(negative=false) expn frac =
   if Word.is_zero frac then
-    mk_zero ~base (bits_in expn) (bits_in frac)
+    mk_zero ~base ~expn_bits:(bits_in expn) (bits_in frac)
   else
+    let sign = if negative then Neg else Pos in
     let expn = Word.signed expn in
     let value = norm base {expn; frac} in
     let prec = Word.bitwidth frac in
     {sign; base; value = Fin value; prec }
 
-let mk_inf ~base prec sign = {sign; base; prec; value = Inf }
+let mk_inf ~base ?(negative=false) prec =
+  let sign = if negative then Neg else Pos in
+  {sign; base; prec; value = Inf }
 
 (* mk nan with payload 0100..01 *)
-let mk_nan ?(signaling=false) ?(sign=Pos) ~base prec =
+let mk_nan ?(signaling=false) ?(negative=false) ~base prec =
+  let sign = if negative then Neg else Pos in
   let payload = Word.one prec in
   let shift = Word.of_int ~width:prec (prec - 2) in
   let payload = Word.(payload lsl shift) in
   let payload = Word.(payload + b1) in
   let value = Nan (signaling, payload) in
   {sign; base; prec; value}
+
+let fin t = match t.value with
+  | Fin {expn; frac} -> Some (expn,frac)
+  | _ -> None
+
+let frac t = match t.value with
+  | Fin {frac} -> Some frac
+  | Nan (_,frac) -> Some frac
+  | _ -> None
+
+let expn t = match t.value with
+  | Fin {expn} -> Some expn
+  | _ -> None
 
 let is_zero x = match x.value with
   | Fin x -> Word.is_zero x.frac
@@ -375,7 +393,7 @@ let is_nan x = match x.value with
   | Nan _ -> true
   | _ -> false
 
-let is_finite x = match x.value with
+let is_fin x = match x.value with
   | Fin _ -> true
   | _ -> false
 
@@ -516,7 +534,7 @@ let sub rm a b =
     {a with value; sign}
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> mk_nan ~sign:Neg ~base:a.base a.prec
+  | Inf, Inf -> mk_nan ~negative:true ~base:a.base a.prec
   | Inf, _ -> a
   | _, Inf -> b
 
@@ -645,7 +663,7 @@ let div ?(rm=Nearest_even) a b =
       dif xfrac yfrac expn one in
   check_operands a b;
   match a.value,b.value with
-  | Fin x, Fin y when is_zero a && is_zero b -> mk_nan ~sign:Neg ~base:a.base a.prec
+  | Fin x, Fin y when is_zero a && is_zero b -> mk_nan ~negative:true ~base:a.base a.prec
   | Fin x, Fin y when is_zero b -> {a with value = Inf}
   | Fin x, Fin y ->
     let x = minimize_exponent a.base x in
@@ -672,11 +690,11 @@ let div ?(rm=Nearest_even) a b =
     {a with value = Fin value; sign; }
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> mk_nan ~base:a.base ~sign:Neg a.prec
+  | Inf, Inf -> mk_nan ~base:a.base ~negative:true a.prec
   | Inf, _ -> a
   | _, Inf -> b
 
-let truncate ?(rm=Nearest_even) a upto = match a.value with
+let truncate ?(rm=Nearest_even) ~upto a = match a.value with
   | Fin {expn; frac} ->
     begin
       match align_right ~base:a.base ~precision:upto expn frac with
@@ -689,20 +707,20 @@ let truncate ?(rm=Nearest_even) a upto = match a.value with
     end
   | _ -> Some a
 
-let truncate_exn ?(rm=Nearest_even) a upto =
-  Option.value_exn (truncate ~rm a upto)
+let truncate_exn ?(rm=Nearest_even) ~upto a =
+  Option.value_exn (truncate ~rm ~upto a)
 
 let sqrt ?(rm=Nearest_even) a = match a.value with
-  | Fin x when is_neg a -> mk_nan ~base:a.base ~sign:Neg a.prec
+  | Fin x when is_neg a -> mk_nan ~base:a.base ~negative:true a.prec
   | Fin x when is_zero a -> a
   | Fin x ->
     let x = minimize_exponent a.base x in
     let expn,frac = x.expn, x.frac in
     let frac = Word.(concat (zero a.prec) x.frac) in
-    let s = mk ~base:a.base Pos expn frac in
+    let s = mk ~base:a.base expn frac in
     let two =
       let expn = Word.zero (bits_in expn) in
-      mk ~base:a.base Pos expn (Word.of_int ~width:(bits_in frac) 2) in
+      mk ~base:a.base expn (Word.of_int ~width:(bits_in frac) 2) in
     let init = div ~rm s two in
     let max = a.prec in
     let rec run x0 n =
@@ -712,8 +730,8 @@ let sqrt ?(rm=Nearest_even) a = match a.value with
         let x' = div ~rm a2 two in
         run x' (n + 1)
       else x0 in
-    truncate_exn (run init 0) a.prec
-  | Inf when is_neg a -> mk_nan ~base:a.base ~sign:Neg a.prec
+    truncate_exn (run init 0) ~upto:a.prec
+  | Inf when is_neg a -> mk_nan ~base:a.base ~negative:true a.prec
   | _ -> a
 
 let largest ~base expn_bits prec =

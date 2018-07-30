@@ -3,7 +3,6 @@ open OUnit2
 open Bap.Std
 
 open Gfloat
-open Gfloat.Debug
 
 type ieee_bin = {
   expn_width : int;  (* bits in exponent *)
@@ -11,24 +10,6 @@ type ieee_bin = {
   int_bit    : bool;  (* integer bit, if exists *)
   bias       : int;
 }
-
-let deconstruct32 x =
-  let w = Word.of_int32 (Int32.bits_of_float x) in
-  let expn = Word.extract_exn ~hi:30 ~lo:23 w in
-  let bias = Word.of_int ~width:8 127 in
-  let expn = Word.(expn - bias) in
-  let frac = Word.extract_exn ~hi:22 w in
-  printf "ocaml %f: unbiased expn %d, frac %s %s, total %s\n"
-    x (wi expn) (wdec frac) (string_of_bits frac) (string_of_bits32 w)
-
-let deconstruct64 x =
-  let w = Word.of_int64 (Int64.bits_of_float x) in
-  let expn = Word.extract_exn ~hi:62 ~lo:52 w in
-  let bias = Word.of_int ~width:11 1023 in
-  let expn = Word.(signed (expn - bias)) in
-  let frac = Word.extract_exn ~hi:51 w in
-  printf "ocaml %f: unbiased expn %d, frac %s, total %s\n"
-    x (wi expn) (string_of_bits frac) (string_of_bits64 w)
 
 let single = { expn_width=8;  bias=127;  frac_width=23; int_bit=false }
 let double = { expn_width=11; bias=1023; frac_width=52; int_bit=false }
@@ -40,10 +21,24 @@ let drop_hd w =
 let all_ones  x = Word.(x = ones (bitwidth x))
 let all_zeros x = Word.(x = zero (bitwidth x))
 
+let enum_bits w =
+  let bits = Word.enum_bits w BigEndian in
+  let b_len = Seq.length bits in
+  let w_len = Word.bitwidth w in
+  if b_len > w_len then
+    Seq.drop bits (b_len - w_len)
+  else bits
+
+let msb w =
+  let bits = enum_bits w in
+  match Seq.findi bits ~f:(fun i x -> x) with
+  | None -> None
+  | Some (i,_) -> Some (Word.bitwidth w - i - 1)
+
 let t_of_bits {expn_width;bias;frac_width;int_bit} bits =
   let total = Word.bitwidth bits in
   let sign = Word.extract_exn ~hi:(total - 1) ~lo:(total - 1) bits in
-  let sign = if Word.is_zero sign then Pos else Neg in
+  let negative = Word.is_one sign in
   let hi_expn, lo_expn = total - 2, total - 2 - expn_width + 1 in
   let hi_frac = lo_expn - 1 in
   let precs = if int_bit then frac_width else frac_width + 1 in
@@ -52,19 +47,19 @@ let t_of_bits {expn_width;bias;frac_width;int_bit} bits =
   let frac = Word.extract_exn ~hi:hi_frac bits in
   let expn' = Word.to_int_exn expn_bits - bias in
   if all_ones expn_bits && Word.is_zero frac then
-    mk_inf ~base:2 precs sign
+    mk_inf ~base:2 precs ~negative
   else if all_ones expn_bits then
     mk_nan ~base:2 precs
   else if all_zeros expn_bits && all_zeros frac then
     let expn = Word.of_int ~width:expn_width expn' in
-    mk ~base:2 sign expn (Word.concat Word.b0 frac)
+    mk ~base:2 ~negative expn (Word.concat Word.b0 frac)
   else
     let dexp = Word.bitwidth frac in
     let ibit = if all_zeros expn_bits && all_zeros frac then Word.b0
       else Word.b1 in
     let expn = Word.of_int ~width:expn_width (expn' - dexp) in
     let frac = if int_bit then frac else Word.concat ibit frac in
-    mk ~base:2 sign expn frac
+    mk ~base:2 ~negative expn frac
 
 let single_of_float f =
   let bits = Word.of_int32 (Int32.bits_of_float f) in
@@ -87,38 +82,41 @@ let normalize_ieee bias biased_expn frac =
     match msb frac with
     | None -> expn, frac
     | Some i ->
-      let len = bits_in frac in
+      let len = Word.bitwidth frac in
       let shift = len - i - 1 in
-      let frac = lshift_frac 2 frac shift in
+      let shift' = Word.of_int ~width:len shift in
+      let frac = Word.(frac lsl shift') in
       let expn = expn - shift in
       expn, frac in
   let expn, frac = norm_expn biased_expn frac in
   norm_frac expn frac
 
+let sign_bit t = if is_neg t then Word.b1 else Word.b0
+
 let bits_of_t kind t =
   let total = kind.expn_width + kind.frac_width + 1 in
   let total = if kind.int_bit then total + 1 else total in
   let (^) = Word.concat in
-  match t.value with
-  | Fin x when is_zero t -> Word.zero total
-  | Fin x  ->
-    let {expn; frac;} = norm t.base x in
+  if is_zero t then Word.zero total
+  else if is_fin t then
+    let expn, frac = Option.value_exn (fin t) in
     let expn = Word.to_int_exn expn in
     let expn = kind.bias + expn in
-    let n = Word.bitwidth x.frac - 1 in
+    let n = Word.bitwidth frac - 1 in
     let expn = expn + n in
     let expn,frac = normalize_ieee kind.bias expn frac in
     let frac = if kind.int_bit then frac else drop_hd frac in
     let expn = Word.of_int ~width:kind.expn_width expn in
-    word_of_sign t.sign ^ expn ^ frac
-  | Nan (_,frac) ->
+    sign_bit t ^ expn ^ frac
+  else if is_nan t then
+    let frac = Option.value_exn (frac t) in
     let expn = Word.ones kind.expn_width in
     let frac = if kind.int_bit then frac else drop_hd frac in
-    word_of_sign t.sign ^ expn ^ frac
-  | Inf ->
+    sign_bit t ^ expn ^ frac
+  else
     let expn = Word.ones kind.expn_width in
     let frac = Word.zero kind.frac_width in
-    word_of_sign t.sign ^ expn ^ frac
+    sign_bit t ^ expn ^ frac
 
 let float_of_single t =
   let bits = bits_of_t single t in
@@ -240,19 +238,18 @@ let truncate str =
 
 let decimal_of_string = function
   | "nan" -> mk_nan ~base:10 decimal_precision
-  | "inf" -> mk_inf ~base:10 decimal_precision Pos
-  | "-inf" -> mk_inf ~base:10 decimal_precision Neg
+  | "inf" -> mk_inf ~base:10 decimal_precision
+  | "-inf" -> mk_inf ~base:10 decimal_precision ~negative:true
   | str ->
-    let is_neg, frac,expn = truncate str in
-    let sign = if is_neg then Neg else Pos in
+    let negative, frac,expn = truncate str in
     if is_zero_float frac then
-      mk ~base:10 sign
+      mk ~base:10 ~negative
         (Word.zero decimal_expn_bits)
         (Word.zero decimal_precision)
     else
       let frac = Word.of_string (sprintf "%s:%du" frac decimal_precision) in
       let expn = Word.of_int ~width:decimal_expn_bits expn in
-      mk ~base:10 sign expn frac
+      mk ~base:10 ~negative expn frac
 
 let truncate_float f =
   let is_neg, x,e = truncate (str_of_float f) in
@@ -261,57 +258,23 @@ let truncate_float f =
   else x
 
 let decimal_of_float x = decimal_of_string (str_of_float x)
-
-let attach_sign x = function
-  | Pos -> x
-  | Neg -> ~-. x
+let attach_sign x t = if is_neg t then ~-. x else x
 
 let string_of_decimal t =
-  let attach_sign x = match t.sign with
-    | Pos -> x
-    | Neg -> "-" ^ x in
-  match t.value with
-  | Fin {expn; frac} ->
+  let attach_sign x = if is_neg t then "-" ^ x else x in
+  if is_fin t then
+    let expn, frac = Option.value_exn (fin t) in
     let expn = Word.to_int_exn (Word.signed expn) in
-    let frac = wdec frac in
+    let frac = Word.string_of_value ~hex:false frac in
     insert_point frac expn |> attach_sign
-  | Inf   -> attach_sign "inf"
-  | Nan _ -> attach_sign "nan"
+  else if is_nan t then attach_sign "nan"
+  else attach_sign "inf"
 
 let float_of_decimal x = float_of_string (string_of_decimal x)
 
 let word_of_float x =
   let x = Int32.bits_of_float x in
   Word.of_int32 ~width:32 x
-
-let bits_of_float x =
-  string_of_bits32 (Word.of_int32 (Int32.bits_of_float x))
-
-let compare_str x y =
-  if String.equal x y then "ok" else "POSSIBLE FAIL"
-
-let create x =
-  let bin32 x =
-    let y = single_of_float x in
-    float_of_single y in
-  let bin64 x =
-    let y = double_of_float x in
-    float_of_double y in
-  let dec x =
-    let x = str_of_float x in
-    let v = decimal_of_string x in
-    float_of_decimal v in
-  let run x =
-    let res = sprintf "%g" x in
-    let bin32 = sprintf "%g" (bin32 x) in
-    let bin64 = sprintf "%g" (bin64 x) in
-    let dec = sprintf "%g" (dec x) in
-    let cmp_bin32 = compare_str res bin32 in
-    let cmp_bin64 = compare_str res bin64 in
-    let cmp_dec = compare_str res dec in
-    printf "make: from %s, bin32 %s, bin64 %s, dec %s\n"
-      res cmp_bin32 cmp_bin64 cmp_dec in
-  run x
 
 let cmp x y = String.equal (str_of_float x) (str_of_float y)
 
@@ -355,304 +318,172 @@ let equal_base10 real ours =
   string_equal (str_of_float real) ours ||
   string_equal' real ours
 
-module Run_test(F : T) = struct
+let equal_base2 x y =
+  let x = Int64.bits_of_float x in
+  let y = Int64.bits_of_float y in
+  Int64.equal x y
 
-  let run2 = true
-  let run10 = true
+let binop op op' x y ctxt =
+  let real2 = op x y in
+  let r2 = base2_binop op' x y in
+  assert_equal ~ctxt ~cmp:equal_base2 real2 r2;
+  let x = truncate_float x in
+  let y = truncate_float y in
+  let real10 = op x y in
+  let r10 = base10_binop op' x y in
+  let equal = equal_base10 real10 r10 in
+  assert_bool "binop base 10 failed" equal
 
-  let cmp_base2 x y =
-    let x = Int64.bits_of_float x in
-    let y = Int64.bits_of_float y in
-    Int64.equal x y
+let binop_special op op' x y ctxt =
+  let real = str_of_float (op x y) in
+  let r2 = str_of_float (base2_binop op' x y) in
+  assert_equal ~ctxt ~cmp:String.equal real r2;
+  let r10 = base10_binop op' x y in
+  assert_equal ~ctxt ~cmp:String.equal real r10
 
-  let binop op op' x y ctxt =
-    let () =
-      if run2 then
-        let real = op x y in
-        let r2 = base2_binop op' x y in
-        assert_equal ~ctxt ~cmp:cmp_base2 real r2 in
-    if run10 then
-      let x = truncate_float x in
-      let y = truncate_float y in
-      let real = op x y in
-      let r10 = base10_binop op' x y in
-      let equal = equal_base10 real r10 in
-      assert_bool "binop base 10 failed" equal
+let unop op op' x ctxt =
+  let real2 = op x in
+  let r2 = base2_unop op' x in
+  assert_equal ~ctxt ~cmp:equal_base2 real2 r2;
+  let x = truncate_float x in
+  let real10 = op x in
+  let r10 = base10_unop op' x in
+  let equal = equal_base10 real10 r10 in
+  assert_bool "unop base 10 failed" equal
 
-  let binop_special op op' x y ctxt =
-    let real = str_of_float (op x y) in
-    let () =
-      if run2 then
-        let r2 = str_of_float (base2_binop op' x y) in
-        assert_equal ~ctxt ~cmp:String.equal real r2 in
-    if run10 then
-      let r10 = base10_binop op' x y in
-      assert_equal ~ctxt ~cmp:String.equal real r10
+let unop_special op op' x ctxt =
+  let real = str_of_float (op x) in
+  let r2 = str_of_float @@ base2_unop op' x in
+  assert_equal ~ctxt ~cmp:String.equal real r2;
+  let r10 = base10_unop op' x in
+  assert_equal ~ctxt ~cmp:String.equal real r10
 
-  let unop op op' x ctxt =
-    let () = if run2 then
-        let real = op x in
-        let r2 = base2_unop op' x in
-        assert_equal ~ctxt ~cmp:cmp_base2 real r2 in
-    if run10 then
-      let x = truncate_float x in
-      let real = op x in
-      let r10 = base10_unop op' x in
-      let equal = equal_base10 real r10 in
-      assert_bool "unop base 10 failed" equal
+let add_special x y ctxt = binop_special (+.) add x y ctxt
+let sub_special x y ctxt = binop_special (-.) sub x y ctxt
+let mul_special x y ctxt = binop_special ( *. ) mul x y ctxt
+let div_special x y ctxt = binop_special ( /. ) div x y ctxt
+let sqrt_special x ctxt = unop_special Float.sqrt sqrt x ctxt
 
-  let unop_special op op' x ctxt =
-    let real = str_of_float (op x) in
-    let () = if run2 then
-        let r2 = str_of_float @@ base2_unop op' x in
-        assert_equal ~ctxt ~cmp:String.equal real r2 in
-    if run10 then
-      let r10 = base10_unop op' x in
-      assert_equal ~ctxt ~cmp:String.equal real r10
+let add x y ctxt = binop (+.) add x y ctxt
+let sub x y ctxt = binop (-.) sub x y ctxt
+let mul x y ctxt = binop ( *. ) mul x y ctxt
+let div x y ctxt = binop ( /. ) div x y ctxt
+let sqrt x ctxt = unop Float.sqrt sqrt x ctxt
 
-  let add_special x y ctxt = binop_special (+.) add x y ctxt
-  let sub_special x y ctxt = binop_special (-.) sub x y ctxt
-  let mul_special x y ctxt = binop_special ( *. ) mul x y ctxt
-  let div_special x y ctxt = binop_special ( /. ) div x y ctxt
-  let sqrt_special x ctxt = unop_special Float.sqrt sqrt x ctxt
+let (+) = add
+let (-) = sub
+let ( * ) = mul
+let ( / ) = div
+let ( sqrt ) = sqrt
 
-  let add x y ctxt = binop (+.) add x y ctxt
-  let sub x y ctxt = binop (-.) sub x y ctxt
-  let mul x y ctxt = binop ( *. ) mul x y ctxt
-  let div x y ctxt = binop ( /. ) div x y ctxt
-  let sqrt x ctxt = unop Float.sqrt sqrt x ctxt
-
-  let (+) = add
-  let (-) = sub
-  let ( * ) = mul
-  let ( / ) = div
-  let ( sqrt ) = sqrt
-
-  let (+$) = add_special
-  let (-$) = sub_special
-  let ( *$ ) = mul_special
-  let ( /$ ) = div_special
+let (+$) = add_special
+let (-$) = sub_special
+let ( *$ ) = mul_special
+let ( /$ ) = div_special
 
 
-  let suite () =
-    let neg x = ~-.x in
-    "Gfloat test" >::: [
+let suite () =
+  let neg x = ~-.x in
+  "Gfloat test" >::: [
 
-      (* special cases, string compare  *)
-      "nan  + nan"  >:: nan  +$ nan;
-      "inf  + inf"  >:: inf  +$ inf;
-      "-inf + -inf" >:: ninf +$ ninf;
-      "nan  + -inf" >:: nan  +$ ninf;
-      "-inf + nan"  >:: ninf +$ nan;
-      "nan  + inf"  >:: nan  +$ inf;
-      "inf  + nan"  >:: inf  +$ nan;
-      "-inf + inf"  >:: ninf +$ inf;
-      "inf  + -inf" >:: inf  +$ ninf;
+    (* special cases, string compare  *)
+    "nan  + nan"  >:: nan  +$ nan;
+    "inf  + inf"  >:: inf  +$ inf;
+    "-inf + -inf" >:: ninf +$ ninf;
+    "nan  + -inf" >:: nan  +$ ninf;
+    "-inf + nan"  >:: ninf +$ nan;
+    "nan  + inf"  >:: nan  +$ inf;
+    "inf  + nan"  >:: inf  +$ nan;
+    "-inf + inf"  >:: ninf +$ inf;
+    "inf  + -inf" >:: inf  +$ ninf;
 
-      "nan  - nan"  >:: nan  -$ nan;
-      "inf  - inf"  >:: inf  -$ inf;
-      "-inf - -inf" >:: ninf -$ ninf;
-      "nan  - -inf" >:: nan  -$ ninf;
-      "-inf - nan"  >:: ninf -$ nan;
-      "nan  - inf"  >:: nan  -$ inf;
-      "inf  - nan"  >:: inf  -$ nan;
-      "-inf - inf"  >:: ninf -$ inf;
-      "inf  - -inf" >:: inf  -$ ninf;
+    "nan  - nan"  >:: nan  -$ nan;
+    "inf  - inf"  >:: inf  -$ inf;
+    "-inf - -inf" >:: ninf -$ ninf;
+    "nan  - -inf" >:: nan  -$ ninf;
+    "-inf - nan"  >:: ninf -$ nan;
+    "nan  - inf"  >:: nan  -$ inf;
+    "inf  - nan"  >:: inf  -$ nan;
+    "-inf - inf"  >:: ninf -$ inf;
+    "inf  - -inf" >:: inf  -$ ninf;
 
-      "nan  * nan"  >:: nan  *$ nan;
-      "inf  * inf"  >:: inf  *$ inf;
-      "-inf * -inf" >:: ninf *$ ninf;
-      "nan  * -inf" >:: nan  *$ ninf;
-      "-inf * nan"  >:: ninf *$ nan;
-      "nan  * inf"  >:: nan  *$ inf;
-      "inf  * nan"  >:: inf  *$ nan;
-      "-inf * inf"  >:: ninf *$ inf;
-      "inf  * -inf" >:: inf  *$ ninf;
+    "nan  * nan"  >:: nan  *$ nan;
+    "inf  * inf"  >:: inf  *$ inf;
+    "-inf * -inf" >:: ninf *$ ninf;
+    "nan  * -inf" >:: nan  *$ ninf;
+    "-inf * nan"  >:: ninf *$ nan;
+    "nan  * inf"  >:: nan  *$ inf;
+    "inf  * nan"  >:: inf  *$ nan;
+    "-inf * inf"  >:: ninf *$ inf;
+    "inf  * -inf" >:: inf  *$ ninf;
 
-      "nan  / nan"  >:: nan  /$ nan;
-      "inf  / inf"  >:: inf  /$ inf;
-      "-inf / -inf" >:: ninf /$ ninf;
-      "nan  / -inf" >:: nan  /$ ninf;
-      "-inf / nan"  >:: ninf /$ nan;
-      "nan  / inf"  >:: nan  /$ inf;
-      "inf  / nan"  >:: inf  /$ nan;
-      "-inf / inf"  >:: ninf /$ inf;
-      "inf  / -inf" >:: inf  /$ ninf;
+    "nan  / nan"  >:: nan  /$ nan;
+    "inf  / inf"  >:: inf  /$ inf;
+    "-inf / -inf" >:: ninf /$ ninf;
+    "nan  / -inf" >:: nan  /$ ninf;
+    "-inf / nan"  >:: ninf /$ nan;
+    "nan  / inf"  >:: nan  /$ inf;
+    "inf  / nan"  >:: inf  /$ nan;
+    "-inf / inf"  >:: ninf /$ inf;
+    "inf  / -inf" >:: inf  /$ ninf;
 
-      "sqrt nan"    >:: sqrt_special nan;
-      "sqrt inf"    >:: sqrt_special inf;
-      "sqrt -inf"   >:: sqrt_special ninf;
+    "sqrt nan"    >:: sqrt_special nan;
+    "sqrt inf"    >:: sqrt_special inf;
+    "sqrt -inf"   >:: sqrt_special ninf;
 
-      (* add *)
-      "4.2 + 2.3"   >:: 4.2 + 2.3;
-      "4.2 + 2.98"  >:: 4.2 + 2.98;
-      "2.2 + 4.28"  >:: 2.2 + 4.28;
-      "2.2 + -4.28" >:: 2.2 + (neg 4.28);
-      "-2.2 + 4.28" >:: (neg 2.2) + 4.28;
-      "2.2 + 2.46"  >:: 2.2 + 2.46;
-      "4.2 + 2.98"  >:: 4.2 + 2.98;
-      "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
+    (* add *)
+    "4.2 + 2.3"   >:: 4.2 + 2.3;
+    "4.2 + 2.98"  >:: 4.2 + 2.98;
+    "2.2 + 4.28"  >:: 2.2 + 4.28;
+    "2.2 + -4.28" >:: 2.2 + (neg 4.28);
+    "-2.2 + 4.28" >:: (neg 2.2) + 4.28;
+    "2.2 + 2.46"  >:: 2.2 + 2.46;
+    "4.2 + 2.98"  >:: 4.2 + 2.98;
+    "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
 
-      (* sub *)
-      "4.2 - 2.28"    >:: 4.2 - 2.28;
-      "4.28 - 2.2"    >:: 4.28 - 2.2;
-      "2.2 - 4.28"    >:: 2.2 - 4.28;
-      "2.2 - -4.28"   >:: 2.2 - (neg 4.28);
-      "2.2 - 2.6"     >:: 2.2 - 2.6;
-      "-2.2 - 2.46"   >:: (neg 2.2) - 2.46;
-      "-2.2 - -2.46)" >:: (neg 2.2) - (neg 2.46);
-      "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
-      "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
-      "0.0 - 0.0"   >:: 0.0 - 0.0;
-      "4.2 - 4.2"   >:: 4.2 - 4.2;
+    (* sub *)
+    "4.2 - 2.28"    >:: 4.2 - 2.28;
+    "4.28 - 2.2"    >:: 4.28 - 2.2;
+    "2.2 - 4.28"    >:: 2.2 - 4.28;
+    "2.2 - -4.28"   >:: 2.2 - (neg 4.28);
+    "2.2 - 2.6"     >:: 2.2 - 2.6;
+    "-2.2 - 2.46"   >:: (neg 2.2) - 2.46;
+    "-2.2 - -2.46)" >:: (neg 2.2) - (neg 2.46);
+    "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
+    "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
+    "0.0 - 0.0"   >:: 0.0 - 0.0;
+    "4.2 - 4.2"   >:: 4.2 - 4.2;
 
-      (* mul *)
-      "1.0 * 2.5"    >:: 1.0 * 2.5;
-      "2.5 * 0.5"    >:: 2.5 * 0.5;
-      "4.2 * 3.4"    >:: 4.2 * 3.4;
-      "0.01 * 0.02"  >:: 0.01 * 0.02;
-      "1.0 * 0.5"    >:: 1.0 * 0.5;
-      "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
-      "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+    (* mul *)
+    "1.0 * 2.5"    >:: 1.0 * 2.5;
+    "2.5 * 0.5"    >:: 2.5 * 0.5;
+    "4.2 * 3.4"    >:: 4.2 * 3.4;
+    "0.01 * 0.02"  >:: 0.01 * 0.02;
+    "1.0 * 0.5"    >:: 1.0 * 0.5;
+    "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
+    "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
 
-      (* div *)
-      "1.0 / 0.0"  >:: 1.0 / 0.0;
-      "2.0 / 0.5"  >:: 2.0 / 0.5;
-      "1.0 / 3.0"  >:: 1.0 / 3.0;
-      "3.0 / 32.0" >:: 3.0 / 32.0;
-      "42.3 / 0.0" >:: 42.3 / 0.0;
-      "0.0 / 0.0"  >:: 0.0 /$ 0.0;
-      "324.32423 / 1.2" >:: 324.32423 / 1.2;
-      "2.4 / 3.123131"  >:: 2.4 / 3.123131;
-      "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
+    (* div *)
+    "1.0 / 0.0"  >:: 1.0 / 0.0;
+    "2.0 / 0.5"  >:: 2.0 / 0.5;
+    "1.0 / 3.0"  >:: 1.0 / 3.0;
+    "3.0 / 32.0" >:: 3.0 / 32.0;
+    "42.3 / 0.0" >:: 42.3 / 0.0;
+    "0.0 / 0.0"  >:: 0.0 /$ 0.0;
+    "324.32423 / 1.2" >:: 324.32423 / 1.2;
+    "2.4 / 3.123131"  >:: 2.4 / 3.123131;
+    "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
 
-      (* sqrt  *)
-      "sqrt 423245.0" >:: sqrt 423245.0;
-      "sqrt 0.213"    >:: sqrt 0.213;
-      "sqrt 1.2356"   >:: sqrt 1.2356;
-      "sqrt 0.0"      >:: sqrt 0.0;
-      "sqrt 1.0"      >:: sqrt 1.0;
-      "sqrt 2.0"      >:: sqrt 2.0;
-      "sqrt 3.0"      >:: sqrt 3.0;
-      "sqrt 20.0"     >:: sqrt 20.0;
-      "sqrt (-1)"     >:: sqrt_special (neg 1.0);
-    ]
+    (* sqrt  *)
+    "sqrt 423245.0" >:: sqrt 423245.0;
+    "sqrt 0.213"    >:: sqrt 0.213;
+    "sqrt 1.2356"   >:: sqrt 1.2356;
+    "sqrt 0.0"      >:: sqrt 0.0;
+    "sqrt 1.0"      >:: sqrt 1.0;
+    "sqrt 2.0"      >:: sqrt 2.0;
+    "sqrt 3.0"      >:: sqrt 3.0;
+    "sqrt 20.0"     >:: sqrt 20.0;
+    "sqrt (-1)"     >:: sqrt_special (neg 1.0);
+  ]
 
-  let () = run_test_tt_main (suite ())
-
-end
-
-module Run_manually(F : T) = struct
-
-  let bitstring_of_float x =
-    let x = Int64.bits_of_float x |> Word.of_int64 in
-    sb64 x
-
-  let unop2 opstr op op' x =
-    let real = op x in
-    let res = base2_unop op' x in
-    let real_str = str_of_float real in
-    let res_str = str_of_float res in
-    if not (equal_base2 real res) then
-      let bs = bitstring_of_float in
-      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
-          (bs real) real (bs res) in
-      printf "FAIL: base 2, %s %f <> %f, real %s <> %s\n"
-        opstr x res real_str res_str
-    else printf "OK!\n"
-
-  let unop10 opstr op op' x =
-    let x = truncate_float x in
-    let real = op x in
-    let res = base10_unop op' x in
-    if not (equal_base10 real res) then
-      printf "FAIL: base 10, %s %f <> %s (%f expected)\n"
-        opstr x res real
-    else printf "OK!\n"
-
-  let binop2 opstr op op' x y =
-    let real = op x y in
-    let res = base2_binop op' x y in
-    let bs = bitstring_of_float in
-    if not (equal_base2 real res) then
-      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
-          (bs real) real (bs res) in
-      let real_str = str_of_float real in
-      let res_str = str_of_float res in
-      printf "FAIL: base 2, %f %s %f <> %f, real %s <> %s\n"
-        x opstr y res real_str res_str
-    else printf "OK!\n"
-
-  let binop10 opstr op op' x y =
-    let x = truncate_float x in
-    let y = truncate_float y in
-    let real = op x y in
-    let res = base10_binop op' x y in
-    if not (equal_base10 real res) then
-      printf "FAIL: base 10, %f %s %f <> %s (%.16f expected)\n"
-        x opstr y res real
-    else printf "OK!\n"
-
-  let run2 = false
-  let run10 = true
-
-  let unop opstr op op' x =
-    if run2 then
-      unop2 opstr op op' x;
-    if run10 then
-      unop10 opstr op op' x
-
-  let binop opstr op op' x y =
-    if run2 then
-      binop2 opstr op op' x y;
-    if run10 then
-      binop10 opstr op op' x y
-
-  let add x y = binop "+" (+.) add x y
-  let sub x y = binop "-" (-.) sub x y
-  let mul x y = binop "*" ( *. ) mul x y
-  let div x y = binop "/" ( /. ) div x y
-  let sqrt x = unop "sqrt" Float.sqrt sqrt x
-
-  let neg x = ~-. x
-  let (+) = add
-  let (-) = sub
-  let ( * ) = mul
-  let ( / ) = div
-  let ( sqrt ) = sqrt
-
-  let () = 0.0 - 0.00000001
-
-  let () = 4.2 + 2.3
-  let () = (neg 2.2) - (neg 2.46)
-
-  let () = 4.2 - 4.2
-  let () = 2.0 * 0.5
-  let () = 1.0 * (neg 0.5)
-  let () = 2.4 / 3.123131
-
-  let () = 324.32423 / 1.2
-  let () = 1.0 / 0.0
-  let () = 2.0 / 0.5
-  let () = 1.0 / 3.0
-  let () = 3.0 / 32.0
-  let () = 42.3 / 0.0
-  let () = 0.0 / 0.0
-  let () = 324.32423 / 1.2
-  let () = 2.4 / 3.123131
-  let () = 0.1313134 / 0.578465631
-
-  let () = sqrt 423245.0
-  let () = sqrt 0.213
-  let () = sqrt 1.2356
-  let () = sqrt 0.0
-  let () = sqrt 1.0
-  let () = sqrt 2.0
-  let () = sqrt 3.0
-  let () = sqrt 20.0
-  let () = sqrt (neg 1.0)
-
-end
-
-module Run1 = Run_test(struct type t = unit end)
-(* module Run2 = Run_manually(struct type t = unit end) *)
+let () = run_test_tt_main (suite ())
