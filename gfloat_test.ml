@@ -284,13 +284,15 @@ let factorial x =
 
 let max_n = 50
 
+let gfloat_pow of_float x n =
+  let rec loop r k =
+    if k < n then loop (mul r x) (k + 1)
+    else r in
+  if n = 0 then of_float 1.0
+  else loop x 1
+
 let gen_sin of_float to_float arg =
-  let pow x n =
-    let rec loop r k =
-      if k < n then loop (mul r x) (k + 1)
-      else r in
-    if n = 0 then of_float 1.0
-    else loop x 1 in
+  let pow = gfloat_pow of_float in
   let of_int_opt x =
     try Some (of_float (float_of_int x))
     with _ -> None in
@@ -302,10 +304,7 @@ let gen_sin of_float to_float arg =
       match of_int_opt (factorial (2 * n + 1)) with
       | None -> res
       | Some f ->
-        let x = pow arg (2 * n + 1) in
-        let r = div s f in
-        let p = mul x r in
-        let res' = add res p in
+        let res' = add res (mul (pow arg (2 * n + 1)) (div s f)) in
         if is_fin res' then
           run res' (n + 1)
         else res
@@ -322,9 +321,7 @@ let ocaml_sin arg =
       let s = (~-. 1.0) ** float_of_int n in
       let f = float_of_int (factorial (2 * n + 1)) in
       let x = arg ** float_of_int (2 * n + 1) in
-      let r = s /. f in
-      let p = x *. r in
-      let res' = res +. p in
+      let res' = res +. (x *. s /. f) in
       if Float.is_nan res' || Float.is_inf res' then res
       else run res' (n + 1)
     else res in
