@@ -387,6 +387,14 @@ let is_nan x = match x.value with
   | Nan _ -> true
   | _ -> false
 
+let is_signaling_nan x = match x.value with
+  | Nan (s,_) -> s
+  | _ -> false
+
+let is_quite_nan x = match x.value with
+  | Nan (s,_) -> not s
+  | _ -> false
+
 let is_fin x = match x.value with
   | Fin _ -> true
   | _ -> false
@@ -485,6 +493,7 @@ let add rm a b =
           let frac = round rm Pos frac loss in
           Fin (norm a.base {expn; frac}) in
     { a with value }
+  | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf, Inf when is_neg a && is_pos b -> a
@@ -526,6 +535,7 @@ let sub rm a b =
     let frac = round rm sign frac loss in
     let value = Fin {expn; frac} in
     {a with value; sign}
+  | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf, Inf -> mk_nan ~negative:true ~base:a.base a.prec
@@ -575,6 +585,7 @@ let mul ?(rm=Nearest_even) a b =
           let frac = round rm sign frac loss in
           Fin (norm a.base { expn; frac}) in
     { a with value; sign }
+  | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf,  _ when is_zero b -> mk_nan a.base a.prec
@@ -681,6 +692,7 @@ let div ?(rm=Nearest_even) a b =
         let expn = Word.signed expn in
         norm a.base  {frac; expn} in
     {a with value = Fin value; sign; }
+  | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
   | Inf, Inf -> mk_nan ~base:a.base ~negative:true a.prec
@@ -726,17 +738,6 @@ let sqrt ?(rm=Nearest_even) a = match a.value with
     truncate_exn (run init 0) ~upto:a.prec
   | Inf when is_neg a -> mk_nan ~base:a.base ~negative:true a.prec
   | _ -> a
-
-let largest ~base expn_bits prec =
-  let expn = Word.(ones expn_bits lsr b1) in
-  let frac = Word.ones prec in
-  {base; sign = Pos; prec; value = Fin {expn; frac} }
-
-let least ~base expn_bits prec =
-  let expn = Word.(ones expn_bits lsr b1) in
-  let expn = Word.neg expn in
-  let frac = Word.one prec in
-  {base; sign = Pos; prec; value = Fin {expn; frac} }
 
 let equal a b =
   check_operands a b;

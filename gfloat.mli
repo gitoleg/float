@@ -27,6 +27,8 @@ val is_inf : gfloat -> bool
 val is_pos : gfloat -> bool
 val is_neg : gfloat -> bool
 val is_zero : gfloat -> bool
+val is_signaling_nan : gfloat -> bool
+val is_quite_nan : gfloat -> bool
 
 val fin  : gfloat -> (word * word) option
 val frac : gfloat -> word option
@@ -38,8 +40,6 @@ val mul : ?rm:rounding -> gfloat -> gfloat -> gfloat
 val div : ?rm:rounding -> gfloat -> gfloat -> gfloat
 val sqrt :   ?rm:rounding -> gfloat -> gfloat
 val neg : gfloat -> gfloat
-
 val truncate : ?rm:rounding -> upto:int -> gfloat -> gfloat option
-
 
 val equal : gfloat -> gfloat -> bool
