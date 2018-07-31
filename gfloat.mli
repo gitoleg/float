@@ -37,6 +37,6 @@ val sub : ?rm:rounding -> gfloat -> gfloat -> gfloat
 val mul : ?rm:rounding -> gfloat -> gfloat -> gfloat
 val div : ?rm:rounding -> gfloat -> gfloat -> gfloat
 val sqrt :   ?rm:rounding -> gfloat -> gfloat
-
+val neg : gfloat -> gfloat
 
 val truncate : ?rm:rounding -> upto:int -> gfloat -> gfloat option

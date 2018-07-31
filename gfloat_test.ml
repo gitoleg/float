@@ -276,8 +276,6 @@ let word_of_float x =
   let x = Int32.bits_of_float x in
   Word.of_int32 ~width:32 x
 
-let cmp x y = String.equal (str_of_float x) (str_of_float y)
-
 let gen_binop of_float to_float op x y =
   op (of_float x) (of_float y) |> to_float
 
@@ -298,6 +296,7 @@ let equal_base2 x y =
   Int64.equal x y
 
 let string_equal real ours =
+  let ours = truncate_zeros ours in
   let len = String.length ours in
   let f x =
     match String.index x '.' with
@@ -370,76 +369,40 @@ let mul x y ctxt = binop ( *. ) mul x y ctxt
 let div x y ctxt = binop ( /. ) div x y ctxt
 let sqrt x ctxt = unop Float.sqrt sqrt x ctxt
 
-let (+) = add
-let (-) = sub
+let ( + ) = add
+let ( - ) = sub
 let ( * ) = mul
 let ( / ) = div
 let ( sqrt ) = sqrt
 
-let (+$) = add_special
-let (-$) = sub_special
+let ( +$ ) = add_special
+let ( -$ ) = sub_special
 let ( *$ ) = mul_special
 let ( /$ ) = div_special
 
+let neg x = ~-.x
 
 let suite () =
-  let neg x = ~-.x in
+
   "Gfloat test" >::: [
 
-    (* special cases, string compare  *)
-    "nan  + nan"  >:: nan  +$ nan;
-    "inf  + inf"  >:: inf  +$ inf;
-    "-inf + -inf" >:: ninf +$ ninf;
-    "nan  + -inf" >:: nan  +$ ninf;
-    "-inf + nan"  >:: ninf +$ nan;
-    "nan  + inf"  >:: nan  +$ inf;
-    "inf  + nan"  >:: inf  +$ nan;
-    "-inf + inf"  >:: ninf +$ inf;
-    "inf  + -inf" >:: inf  +$ ninf;
-
-    "nan  - nan"  >:: nan  -$ nan;
-    "inf  - inf"  >:: inf  -$ inf;
-    "-inf - -inf" >:: ninf -$ ninf;
-    "nan  - -inf" >:: nan  -$ ninf;
-    "-inf - nan"  >:: ninf -$ nan;
-    "nan  - inf"  >:: nan  -$ inf;
-    "inf  - nan"  >:: inf  -$ nan;
-    "-inf - inf"  >:: ninf -$ inf;
-    "inf  - -inf" >:: inf  -$ ninf;
-
-    "nan  * nan"  >:: nan  *$ nan;
-    "inf  * inf"  >:: inf  *$ inf;
-    "-inf * -inf" >:: ninf *$ ninf;
-    "nan  * -inf" >:: nan  *$ ninf;
-    "-inf * nan"  >:: ninf *$ nan;
-    "nan  * inf"  >:: nan  *$ inf;
-    "inf  * nan"  >:: inf  *$ nan;
-    "-inf * inf"  >:: ninf *$ inf;
-    "inf  * -inf" >:: inf  *$ ninf;
-
-    "nan  / nan"  >:: nan  /$ nan;
-    "inf  / inf"  >:: inf  /$ inf;
-    "-inf / -inf" >:: ninf /$ ninf;
-    "nan  / -inf" >:: nan  /$ ninf;
-    "-inf / nan"  >:: ninf /$ nan;
-    "nan  / inf"  >:: nan  /$ inf;
-    "inf  / nan"  >:: inf  /$ nan;
-    "-inf / inf"  >:: ninf /$ inf;
-    "inf  / -inf" >:: inf  /$ ninf;
-
-    "sqrt nan"    >:: sqrt_special nan;
-    "sqrt inf"    >:: sqrt_special inf;
-    "sqrt -inf"   >:: sqrt_special ninf;
-
     (* add *)
-    "4.2 + 2.3"   >:: 4.2 + 2.3;
-    "4.2 + 2.98"  >:: 4.2 + 2.98;
-    "2.2 + 4.28"  >:: 2.2 + 4.28;
-    "2.2 + -4.28" >:: 2.2 + (neg 4.28);
-    "-2.2 + 4.28" >:: (neg 2.2) + 4.28;
-    "2.2 + 2.46"  >:: 2.2 + 2.46;
-    "4.2 + 2.98"  >:: 4.2 + 2.98;
+    "4.2 + 2.3"     >:: 4.2 + 2.3;
+    "4.2 + 2.98"    >:: 4.2 + 2.98;
+    "2.2 + 4.28"    >:: 2.2 + 4.28;
+    "2.2 + -4.28"   >:: 2.2 + (neg 4.28);
+    "-2.2 + 4.28"   >:: (neg 2.2) + 4.28;
+    "2.2 + 2.46"    >:: 2.2 + 2.46;
     "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
+    "nan  + nan"    >:: nan  +$ nan;
+    "inf  + inf"    >:: inf  +$ inf;
+    "-inf + -inf"   >:: ninf +$ ninf;
+    "nan  + -inf"   >:: nan  +$ ninf;
+    "-inf + nan"    >:: ninf +$ nan;
+    "nan  + inf"    >:: nan  +$ inf;
+    "inf  + nan"    >:: inf  +$ nan;
+    "-inf + inf"    >:: ninf +$ inf;
+    "inf  + -inf"   >:: inf  +$ ninf;
 
     (* sub *)
     "4.2 - 2.28"    >:: 4.2 - 2.28;
@@ -451,8 +414,17 @@ let suite () =
     "-2.2 - -2.46)" >:: (neg 2.2) - (neg 2.46);
     "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
     "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
-    "0.0 - 0.0"   >:: 0.0 - 0.0;
-    "4.2 - 4.2"   >:: 4.2 - 4.2;
+    "0.0 - 0.0"     >:: 0.0 - 0.0;
+    "4.2 - 4.2"     >:: 4.2 - 4.2;
+    "nan  - nan"    >:: nan  -$ nan;
+    "inf  - inf"    >:: inf  -$ inf;
+    "-inf - -inf"   >:: ninf -$ ninf;
+    "nan  - -inf"   >:: nan  -$ ninf;
+    "-inf - nan"    >:: ninf -$ nan;
+    "nan  - inf"    >:: nan  -$ inf;
+    "inf  - nan"    >:: inf  -$ nan;
+    "-inf - inf"    >:: ninf -$ inf;
+    "inf  - -inf"   >:: inf  -$ ninf;
 
     (* mul *)
     "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -462,17 +434,35 @@ let suite () =
     "1.0 * 0.5"    >:: 1.0 * 0.5;
     "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
     "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+    "nan  * nan"   >:: nan  *$ nan;
+    "inf  * inf"   >:: inf  *$ inf;
+    "-inf * -inf"  >:: ninf *$ ninf;
+    "nan  * -inf"  >:: nan  *$ ninf;
+    "-inf * nan"   >:: ninf *$ nan;
+    "nan  * inf"   >:: nan  *$ inf;
+    "inf  * nan"   >:: inf  *$ nan;
+    "-inf * inf"   >:: ninf *$ inf;
+    "inf  * -inf"  >:: inf  *$ ninf;
 
     (* div *)
-    "1.0 / 0.0"  >:: 1.0 / 0.0;
-    "2.0 / 0.5"  >:: 2.0 / 0.5;
-    "1.0 / 3.0"  >:: 1.0 / 3.0;
-    "3.0 / 32.0" >:: 3.0 / 32.0;
-    "42.3 / 0.0" >:: 42.3 / 0.0;
-    "0.0 / 0.0"  >:: 0.0 /$ 0.0;
+    "1.0 / 0.0"   >:: 1.0 / 0.0;
+    "2.0 / 0.5"   >:: 2.0 / 0.5;
+    "1.0 / 3.0"   >:: 1.0 / 3.0;
+    "3.0 / 32.0"  >:: 3.0 / 32.0;
+    "42.3 / 0.0"  >:: 42.3 / 0.0;
+    "0.0 / 0.0"   >:: 0.0 /$ 0.0;
     "324.32423 / 1.2" >:: 324.32423 / 1.2;
     "2.4 / 3.123131"  >:: 2.4 / 3.123131;
     "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
+    "nan  / nan"  >:: nan  /$ nan;
+    "inf  / inf"  >:: inf  /$ inf;
+    "-inf / -inf" >:: ninf /$ ninf;
+    "nan  / -inf" >:: nan  /$ ninf;
+    "-inf / nan"  >:: ninf /$ nan;
+    "nan  / inf"  >:: nan  /$ inf;
+    "inf  / nan"  >:: inf  /$ nan;
+    "-inf / inf"  >:: ninf /$ inf;
+    "inf  / -inf" >:: inf  /$ ninf;
 
     (* sqrt  *)
     "sqrt 423245.0" >:: sqrt 423245.0;
@@ -484,6 +474,106 @@ let suite () =
     "sqrt 3.0"      >:: sqrt 3.0;
     "sqrt 20.0"     >:: sqrt 20.0;
     "sqrt (-1)"     >:: sqrt_special (neg 1.0);
+    "sqrt nan"      >:: sqrt_special nan;
+    "sqrt inf"      >:: sqrt_special inf;
+    "sqrt -inf"     >:: sqrt_special ninf;
   ]
 
 let () = run_test_tt_main (suite ())
+
+
+module Run_manually(F : T) = struct
+  open Gfloat
+  open Gfloat_debug
+
+  let bitstring_of_float x =
+    let x = Int64.bits_of_float x |> Word.of_int64 in
+    sb64 x
+
+  let unop2 opstr op op' x =
+    let real = op x in
+    let res = base2_unop op' x in
+    let real_str = str_of_float real in
+    let res_str = str_of_float res in
+    if not (equal_base2 real res) then
+      let bs = bitstring_of_float in
+      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
+          (bs real) real (bs res) in
+      printf "FAIL: base 2, %s %f <> %f, real %s <> %s\n"
+        opstr x res real_str res_str
+    else printf "OK!\n"
+
+  let unop10 opstr op op' x =
+    let x = truncate_float x in
+    let real = op x in
+    let res = base10_unop op' x in
+    if not (equal_base10 real res) then
+      printf "FAIL: base 10, %s %f <> %s (%f expected)\n"
+        opstr x res real
+    else printf "OK!\n"
+
+  let binop2 opstr op op' x y =
+    let real = op x y in
+    let res = base2_binop op' x y in
+    let bs = bitstring_of_float in
+    if not (equal_base2 real res) then
+      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
+          (bs real) real (bs res) in
+      let real_str = str_of_float real in
+      let res_str = str_of_float res in
+      printf "FAIL: base 2, %f %s %f <> %f, real %s <> %s\n"
+        x opstr y res real_str res_str
+    else printf "OK!\n"
+
+  let binop10 opstr op op' x y =
+    let x = truncate_float x in
+    let y = truncate_float y in
+    let real = op x y in
+    let res = base10_binop op' x y in
+    if not (equal_base10 real res) then
+      printf "FAIL: base 10, %f %s %f <> %s (%.16f expected)\n"
+        x opstr y res real
+    else printf "OK!\n"
+
+  let run2 = false
+  let run10 = true
+
+  let unop opstr op op' x =
+    if run2 then
+      unop2 opstr op op' x;
+    if run10 then
+      unop10 opstr op op' x
+
+  let binop opstr op op' x y =
+    if run2 then
+      binop2 opstr op op' x y;
+    if run10 then
+      binop10 opstr op op' x y
+
+  let add x y = binop "+" (+.) add x y
+  let sub x y = binop "-" (-.) sub x y
+  let mul x y = binop "*" ( *. ) mul x y
+  let div x y = binop "/" ( /. ) div x y
+  let sqrt x = unop "sqrt" Float.sqrt sqrt x
+
+  let neg x = ~-. x
+  let (+) = add
+  let (-) = sub
+  let ( * ) = mul
+  let ( / ) = div
+  let ( sqrt ) = sqrt
+
+  let () = 4.2 + 2.98
+  let () = 1.0 / 0.0
+  let () = 2.0 / 0.5
+  let () = 1.0 / 3.0
+  let () = 3.0 / 32.0
+  let () = 42.3 / 0.0
+  let () = 0.0 / 0.0
+  let () = 324.32423 / 1.2
+  let () = 2.4 / 3.123131
+  let () = 0.1313134 / 0.578465631
+
+end
+
+(* module Run = Run_manually(struct type t = () end) *)

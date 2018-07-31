@@ -204,10 +204,6 @@ let round rm sign frac loss =
     else Word.succ frac
   | `Down -> frac
 
-let round' rm sign x loss =
-  let frac = round rm sign x.frac loss in
-  {x with frac}
-
 (* return None if number doesn't fit into [precs]  *)
 let pow ~base ~precs n =
   let base = Word.of_int ~width:precs base in
@@ -227,8 +223,6 @@ let lshift_frac base frac n =
     | None -> Word.zero (bits_in frac)
     | Some k -> Word.(frac * k)
 
-(* TODO: do we really need these conversions from int to word and
-   back for n?? *)
 let rshift_frac base frac n =
   if n = 0 then frac, ExactlyZero
   else
@@ -335,7 +329,7 @@ let maximize_exponent base x =
   let expn, frac = safe_align_right base x.expn x.frac in
   { expn; frac }
 
-let norm = maximize_exponent
+let norm = minimize_exponent
 
 let mk_zero ~base ~expn_bits prec =
   let min = min_exponent expn_bits in
@@ -457,10 +451,6 @@ let neg x = {x with sign = revert_sign x.sign}
 let extend x addend = { x with frac = Word.(concat (zero addend) x.frac) }
 let extract prec frac = Word.extract_exn ~hi:(prec - 1) frac
 
-(*  TODO:
-    is it guaranteed that common_ground returns a correct values??
-    i.e. with an equal exponent. Because safe_align stops in
-    case max exponent achieved *)
 let add rm a b =
   let common_ground base x y =
     let x,y = balance base x y in
@@ -475,6 +465,8 @@ let add rm a b =
   check_operands a b;
   match a.value, b.value with
   | Fin x, Fin y ->
+    let x = maximize_exponent a.base x in
+    let y = maximize_exponent a.base y in
     let x,y,loss = common_ground a.base x y in
     let frac = Word.(x.frac + y.frac) in
     let value =
@@ -652,7 +644,6 @@ let expn_dif x y =
 let div ?(rm=Nearest_even) a b =
   let mk_zero expn_bits =
     { expn=Word.zero expn_bits; frac = Word.zero a.prec } in
-  (* TODO: check this function, it's called rec more than once! *)
   let rec dif xfrac yfrac xexpn yexpn =
     match expn_dif xexpn yexpn with
     | `Underflow_expn -> None
