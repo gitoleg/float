@@ -40,3 +40,6 @@ val sqrt :   ?rm:rounding -> gfloat -> gfloat
 val neg : gfloat -> gfloat
 
 val truncate : ?rm:rounding -> upto:int -> gfloat -> gfloat option
+
+
+val equal : gfloat -> gfloat -> bool

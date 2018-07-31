@@ -206,7 +206,54 @@ private:
 };
 
 
+int fact(int x) {
+    int res = 1;
+    while (x != 0) {
+        res = res * x;
+        x -= 1;
+    }
+    return res;
+}
+
+detail::IEEEFloat pow(const detail::IEEEFloat &x, std::size_t n) {
+    if (n == 0) return detail::IEEEFloat(double(1.0));
+    else {
+        detail::IEEEFloat res(x);
+        for (std::size_t i = 1; i < n; ++i) {
+            res.multiply(x, APFloatBase::rmNearestTiesToEven);
+        }
+        return res;
+    }
+}
+
+typedef detail::IEEEFloat apf;
+
+void mysin(double a) {
+    apf arg(a);
+    apf res(double(0.0));
+    for (std::size_t i = 0; i < 10; ++i) {
+        apf s = pow(apf(double(-1.0)), i);
+        apf f((double)fact(2 * i + 1));
+        apf x = pow(arg, 2 * i + 1);
+        s.divide(f,APFloatBase::rmNearestTiesToEven);
+        s.multiply(x, APFloatBase::rmNearestTiesToEven);
+        res.add(s, APFloatBase::rmNearestTiesToEven);
+
+        APInt n = res.bitcastToAPInt();
+        std::string r = n.toString(2, false);
+        std::cout << i << ", bits: " << r << std::endl;
+    }
+
+    std::cout << " res " << res.convertToDouble() << std::endl;
+
+    // APInt i = res.bitcastToAPInt();
+    // std::string s = i.toString(2, false);
+    // std::cout << "bits: " << s << std::endl;
+}
+
+
 void test() {
+    mysin(0.5);
 
     // std::cout << "rmNearestTiesToEven:" << add(3.5, 4.2, APFloatBase::rmNearestTiesToEven) << std::endl
     //           << "rmTowardPositive   :" << add(3.5, 4.2, APFloatBase::rmTowardPositive) << std::endl
@@ -257,6 +304,7 @@ void test() {
 } //namespace my
 
 int main() {
+
     my::test();
     return 0;
 }

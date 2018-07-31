@@ -227,7 +227,7 @@ let rshift_frac base frac n =
   if n = 0 then frac, ExactlyZero
   else
     match pow ~base ~precs:(bits_in frac) n with
-    | None -> Word.zero (bits_in frac), MoreThanHalf
+    | None -> Word.zero (bits_in frac), ExactlyZero
     | Some k ->
       if Word.is_zero k then k, ExactlyZero
       else
@@ -479,7 +479,8 @@ let add rm a b =
         match align_right a.base a.prec x.expn frac with
         | None -> Inf
         | Some (expn, frac, loss') ->
-          let loss = combine_loss loss' loss in
+          let loss = if Word.equal x.expn expn then loss
+            else combine_loss loss' loss in
           let frac = extract a.prec frac in
           let frac = round rm Pos frac loss in
           Fin (norm a.base {expn; frac}) in
@@ -519,7 +520,8 @@ let sub rm a b =
     let sign = if reverse then revert_sign a.sign else a.sign in
     let expn,frac,loss' =
       align_right_exn ~base:a.base ~precision:a.prec x.expn frac in
-    let loss = combine_loss loss' loss in
+    let loss = if Word.equal x.expn expn then loss
+          else combine_loss loss' loss in
     let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
     let frac = round rm sign frac loss in
     let value = Fin {expn; frac} in
@@ -735,3 +737,18 @@ let least ~base expn_bits prec =
   let expn = Word.neg expn in
   let frac = Word.one prec in
   {base; sign = Pos; prec; value = Fin {expn; frac} }
+
+let equal a b =
+  check_operands a b;
+  if a.sign <> b.sign then false
+  else
+    match a.value, b.value with
+    | Fin x, Fin y ->
+      let x = norm a.base x in
+      let y = norm a.base y in
+      Word.equal x.expn y.expn &&
+      Word.equal x.frac y.frac
+    | Inf, Inf -> a.sign = b.sign
+    | Nan (s,payload), Nan (s', payload') ->
+      Word.equal payload payload' && Bool.equal s s'
+    | _ -> false

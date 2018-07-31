@@ -94,6 +94,7 @@ let normalize_ieee bias biased_expn frac =
 let sign_bit t = if is_neg t then Word.b1 else Word.b0
 
 let bits_of_t kind t =
+  let open Gfloat_debug in
   let total = kind.expn_width + kind.frac_width + 1 in
   let total = if kind.int_bit then total + 1 else total in
   let (^) = Word.concat in
@@ -133,7 +134,7 @@ let truncate_zeros x =
   | None -> x
   | Some p -> String.rstrip ~drop:(fun c -> Char.equal c '0') x
 
-let decimal_precision = 20
+let decimal_precision = 40
 let decimal_expn_bits = 10
 
 let log2 x = Float.log10 x /. Float.log10 2.0
@@ -176,11 +177,14 @@ let actual_bits x =
     let w = Word.of_string (sprintf "%s:%du" x len) in
     min_bits w
 
+exception Not_created of string
+
 let check_int_part str =
   let max_digits = digits_of_bits decimal_precision in
   if (String.length str > max_digits) then
-    failwith
-      (sprintf "cat'n represent %s in %d bits" str decimal_precision)
+    let err = sprintf "cat'n represent %s in %d bits" str
+        decimal_precision in
+    raise (Not_created err)
 
 let rec adjust_base10 x expn bits =
   if min_bits x <= bits then x,expn
@@ -272,9 +276,84 @@ let string_of_decimal t =
 
 let float_of_decimal x = float_of_string (string_of_decimal x)
 
-let word_of_float x =
-  let x = Int32.bits_of_float x in
-  Word.of_int32 ~width:32 x
+let factorial x =
+  let rec loop r n =
+    if n <> 0 then
+      loop (r * n) (n - 1)
+    else r in
+  loop x (x - 1)
+
+let get_bits x =
+  Int64.bits_of_float x |>
+  Word.of_int64 |> Gfloat_debug.sb
+
+let maxn = 30
+
+let osinx arg =
+  let rec run res n =
+    if n < maxn then
+      (* let () = printf "%d: %s\n" n (get_bits res) in *)
+      let s = (~-. 1.0) ** float_of_int n in
+      (* let () = printf "   s %s\n" (get_bits s) in *)
+      let f = float_of_int (factorial (2 * n + 1)) in
+      (* let () = printf "   f %s\n" (get_bits f) in *)
+      let x = arg ** float_of_int (2 * n + 1) in
+      (* let () = printf "   x %s\n" (get_bits x) in *)
+      let r = s /. f in
+      (* let () = printf "   r %s\n" (get_bits r) in *)
+      let p = x *. r in
+      (* let () = printf "   p %s(%f)\n" (get_bits p) p in *)
+      let res' = res +. p in
+      (* let () = printf "   q %s\n" (get_bits res') in *)
+      run res' (n + 1)
+    else res in
+  run 0.0 0
+
+let get_bits' = get_bits
+
+let get_bits x =
+  Int64.bits_of_float (float_of_double x) |>
+  Word.of_int64 |> Gfloat_debug.sb
+
+let gen_sin of_float to_float arg =
+  let pow x n =
+    let rec loop r k =
+      if k < n then loop (mul r x) (k + 1)
+      else r in
+    if n = 0 then of_float 1.0
+    else loop x 1 in
+  let of_int_opt x =
+    try Some (of_float (float_of_int x))
+    with _ -> None in
+  let arg = of_float arg in
+  let mone = of_float (~-. 1.0) in
+  let rec run res n =
+    if n < maxn then
+      (* let () = printf "%d: %s\n" n (get_bits res) in *)
+      let s = pow mone n in
+      (* let () = printf "   s %s\n" (get_bits s) in *)
+      match of_int_opt (factorial (2 * n + 1)) with
+      | None -> res
+      | Some f ->
+        (* let () = printf "   f %s\n" (get_bits f) in *)
+        let x = pow arg (2 * n + 1) in
+        (* let () = printf "   x %s\n" (get_bits x) in *)
+        let r = div s f in
+        (* let () = printf "   r %s\n" (get_bits r) in *)
+        let p = mul x r in
+        (* let () = printf "   p %s(%f)\n" (get_bits p) (to_float p) in *)
+        let res' = add res p in
+        (* let () = printf "   q %s\n" (get_bits res') in *)
+        if is_fin res' then
+          run res' (n + 1)
+        else res
+    else res in
+  run (of_float 0.0) 0 |> to_float
+
+(* let _ = osinx 0.5 *)
+(* let () = printf "\n\n" *)
+(* let _ = gen_sin double_of_float float_of_double 0.5 *)
+
 
 let gen_binop of_float to_float op x y =
   op (of_float x) (of_float y) |> to_float
@@ -350,6 +429,14 @@ let unop op op' x ctxt =
   let equal = equal_base10 real10 r10 in
   assert_bool "unop base 10 failed" equal
 
+let sin x ctxt =
+  let real = Caml.sin x in
+  let r2 = gen_sin double_of_float float_of_double x in
+  assert_equal ~ctxt ~cmp:equal_base2 real r2;
+  let r10 = gen_sin decimal_of_float string_of_decimal x in
+  let equal = equal_base10 real r10 in
+  assert_bool "sin base 10 failed" equal
+
 let unop_special op op' x ctxt =
   let real = str_of_float (op x) in
   let r2 = str_of_float @@ base2_unop op' x in
@@ -387,6 +474,7 @@ let suite () =
   "Gfloat test" >::: [
 
     (* add *)
+    "0.0 + 0.5"     >:: 0.0 + 0.5;
     "4.2 + 2.3"     >:: 4.2 + 2.3;
     "4.2 + 2.98"    >:: 4.2 + 2.98;
     "2.2 + 4.28"    >:: 2.2 + 4.28;
@@ -477,10 +565,14 @@ let suite () =
     "sqrt nan"      >:: sqrt_special nan;
     "sqrt inf"      >:: sqrt_special inf;
     "sqrt -inf"     >:: sqrt_special ninf;
+
+    (* sin  *)
+    "sin 0.5"       >:: sin 0.5;
+    "sin 0.0"       >:: sin 0.0;
+    "sin 1.0"       >:: sin 1.0;
   ]
 
 let () = run_test_tt_main (suite ())
-
 
 module Run_manually(F : T) = struct
   open Gfloat
@@ -535,8 +627,8 @@ module Run_manually(F : T) = struct
         x opstr y res real
     else printf "OK!\n"
 
-  let run2 = false
-  let run10 = true
+  let run2 = true
+  let run10 = false
 
   let unop opstr op op' x =
     if run2 then
@@ -563,16 +655,20 @@ module Run_manually(F : T) = struct
   let ( / ) = div
   let ( sqrt ) = sqrt
 
-  let () = 4.2 + 2.98
-  let () = 1.0 / 0.0
-  let () = 2.0 / 0.5
-  let () = 1.0 / 3.0
-  let () = 3.0 / 32.0
-  let () = 42.3 / 0.0
-  let () = 0.0 / 0.0
-  let () = 324.32423 / 1.2
-  let () = 2.4 / 3.123131
-  let () = 0.1313134 / 0.578465631
+  let sin x =
+    let real = Caml.sin x in
+    let res = gen_sin double_of_float float_of_double x in
+    if not (equal_base2 real res) then
+      let bs = bitstring_of_float in
+      let real_str = str_of_float real in
+      let res_str = str_of_float res in
+      let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n"
+          (bs real) real (bs res) in
+      printf "FAIL: base 2, sin %f <> %f, real %s <> %s\n"
+        x res real_str res_str
+    else printf "OK!\n"
+
+  let () = sin 0.5
 
 end
 
