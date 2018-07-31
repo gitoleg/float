@@ -94,7 +94,6 @@ let normalize_ieee bias biased_expn frac =
 let sign_bit t = if is_neg t then Word.b1 else Word.b0
 
 let bits_of_t kind t =
-  let open Gfloat_debug in
   let total = kind.expn_width + kind.frac_width + 1 in
   let total = if kind.int_bit then total + 1 else total in
   let (^) = Word.concat in
@@ -546,7 +545,7 @@ let suite () =
     "sin 0.0"       >:: sin 0.0;
     "sin 0.5"       >:: sin 0.5;
     "sin 1.0"       >:: sin 1.0;
-    "sin 0.12345"   >:: sin 0.12345;
+    "sin 0.5216..." >:: sin 0.52167823455675756576;
   ]
 
 let () = run_test_tt_main (suite ())
