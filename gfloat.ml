@@ -52,94 +52,6 @@ let msb w =
   | None -> None
   | Some (i,_) -> Some (Word.bitwidth w - i - 1)
 
-module Debug = struct
-
-  let ws = Word.to_string
-  let wi = Word.to_int_exn
-  let wdec = Word.string_of_value ~hex:false
-
-  let string_of_bits w =
-    let bits = enum_bits w in
-    let (@@) = sprintf "%s%d" in
-    Seq.fold bits ~init:"" ~f:(fun s x ->
-        if x then s @@ 1
-        else s @@ 0)
-
-  let string_of_bits32 w =
-    let bits = enum_bits w in
-    let (@@) = sprintf "%s%d" in
-    Seq.foldi bits ~init:"" ~f:(fun i acc x ->
-        let a =
-          if i = 1 || i = 9 then "_"
-          else "" in
-        let s = sprintf "%s%s" acc a in
-        if x then s @@ 1
-        else s @@ 0)
-
-  let string_of_bits64 w =
-    let bits = enum_bits w in
-    let (@@) = sprintf "%s%d" in
-    Seq.foldi bits ~init:"" ~f:(fun i acc x ->
-        let a =
-          if i = 1 || i = 12 then "_"
-          else "" in
-        let s = sprintf "%s%s" acc a in
-        if x then s @@ 1
-        else s @@ 0)
-
-  let sb = string_of_bits
-  let sb32 = string_of_bits32
-  let sb64 = string_of_bits64
-
-  let string_of_t t =
-    let str_of_sign = function
-      | Pos -> ""
-      | Neg -> "-" in
-    match t.value with
-    | Nan _ -> "nan"
-    | Fin {expn; frac} ->
-      sprintf "%s * %d * %d ^ %d" (str_of_sign t.sign) (wi frac) t.base
-        (wi expn)
-    | Inf -> sprintf "%sinf" (str_of_sign t.sign)
-
-  let string_of_loss a = Sexp.to_string (sexp_of_loss a)
-
-  let msb_exn x = Option.value_exn (msb x)
-
-  let lsb w =
-    let bits = enum_bits w in
-    match List.findi (Seq.to_list_rev bits) ~f:(fun i x -> x) with
-    | None -> None
-    | Some (i,_) -> Some i
-
-  let frac_exn a = match a.value with
-    | Fin {frac} -> frac
-    | _ -> failwith "frac unavailable"
-
-  let expn_exn a = match a.value with
-    | Fin {expn} -> expn
-    | _ -> failwith "frac unavailable"
-
-  let data_exn a = match a.value with
-    | Fin {expn; frac} -> expn, frac
-    | _ -> failwith "data unavailable"
-
-  let str_exn a =
-    let e, f = data_exn a in
-    sprintf "expn %d, frac %d" (wi e) (wi f)
-
-  let pr_xy pref base x y = match base with
-    | 2 ->
-      printf "%s:\n  x: %d, %s\n  y: %d, %s\n" pref
-        (wi x.expn) (sb x.frac) (wi y.expn) (sb y.frac)
-    | _ ->
-      printf "%s:\n  x: %d, %s\n  y: %d, %s\n" pref
-        (wi x.expn) (wdec x.frac) (wi y.expn) (wdec y.frac)
-
-end
-
-open Debug
-
 let bits_in = Word.bitwidth
 
 (* returns a list of digits in [loss] *)
@@ -331,36 +243,39 @@ let maximize_exponent base x =
 
 let norm = minimize_exponent
 
-let mk_zero ~base ~expn_bits prec =
+let zero ~radix ~expn_bits prec =
   let min = min_exponent expn_bits in
   let expn = Word.of_int ~width:expn_bits min in
   let frac = Word.zero prec in
   let value = {expn; frac} in
-  {sign = Pos; base; value = Fin value; prec }
+  {sign = Pos; base=radix; value = Fin value; prec }
 
-let mk ~base ?(negative=false) expn frac =
+let create ~radix ?(negative=false) expn frac =
   if Word.is_zero frac then
-    mk_zero ~base ~expn_bits:(bits_in expn) (bits_in frac)
+    zero ~radix ~expn_bits:(bits_in expn) (bits_in frac)
   else
     let sign = if negative then Neg else Pos in
     let expn = Word.signed expn in
-    let value = norm base {expn; frac} in
+    let value = norm radix {expn; frac} in
     let prec = Word.bitwidth frac in
-    {sign; base; value = Fin value; prec }
+    {sign; base=radix; value = Fin value; prec }
 
-let mk_inf ~base ?(negative=false) prec =
+let inf ~radix ?(negative=false) prec =
   let sign = if negative then Neg else Pos in
-  {sign; base; prec; value = Inf }
+  {sign; base=radix; prec; value = Inf }
 
 (* mk nan with payload 0100..01 *)
-let mk_nan ?(signaling=false) ?(negative=false) ~base prec =
+let nan ?(signaling=false) ?(negative=false) ?payload ~radix prec =
   let sign = if negative then Neg else Pos in
-  let payload = Word.one prec in
-  let shift = Word.of_int ~width:prec (prec - 2) in
-  let payload = Word.(payload lsl shift) in
-  let payload = Word.(payload + b1) in
+  let payload = match payload with
+    | Some p -> p
+    | None ->
+      let payload = Word.one prec in
+      let shift = Word.of_int ~width:prec (prec - 2) in
+      let payload = Word.(payload lsl shift) in
+      Word.(payload + b1) in
   let value = Nan (signaling, payload) in
-  {sign; base; prec; value}
+  {sign; base=radix; prec; value}
 
 let fin t = match t.value with
   | Fin {expn; frac} -> Some (expn,frac)
@@ -538,7 +453,7 @@ let sub rm a b =
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> mk_nan ~negative:true ~base:a.base a.prec
+  | Inf, Inf -> nan ~negative:true ~radix:a.base a.prec
   | Inf, _ -> a
   | _, Inf -> b
 
@@ -588,8 +503,8 @@ let mul ?(rm=Nearest_even) a b =
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf,  _ when is_zero b -> mk_nan a.base a.prec
-  | _, Inf when is_zero a -> mk_nan a.base a.prec
+  | Inf,  _ when is_zero b -> nan a.base a.prec
+  | _, Inf when is_zero a -> nan a.base a.prec
   | Inf, Inf when a.sign = b.sign -> { a with sign = Pos }
   | Inf, Inf when a.sign <> b.sign -> { a with sign = Neg }
   | Inf, _ -> a
@@ -655,7 +570,7 @@ let expn_dif x y =
   else `Nice e
 
 let div ?(rm=Nearest_even) a b =
-  let mk_zero expn_bits =
+  let zero expn_bits =
     { expn=Word.zero expn_bits; frac = Word.zero a.prec } in
   let rec dif xfrac yfrac xexpn yexpn =
     match expn_dif xexpn yexpn with
@@ -667,7 +582,7 @@ let div ?(rm=Nearest_even) a b =
       dif xfrac yfrac expn one in
   check_operands a b;
   match a.value,b.value with
-  | Fin x, Fin y when is_zero a && is_zero b -> mk_nan ~negative:true ~base:a.base a.prec
+  | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true ~radix:a.base a.prec
   | Fin x, Fin y when is_zero b -> {a with value = Inf}
   | Fin x, Fin y ->
     let x = minimize_exponent a.base x in
@@ -677,7 +592,7 @@ let div ?(rm=Nearest_even) a b =
     let xfrac = Word.concat extend x.frac in
     let yfrac = Word.concat extend y.frac in
     let value = match dif xfrac yfrac x.expn y.expn with
-      | None -> mk_zero (bits_in x.expn)
+      | None -> zero (bits_in x.expn)
       | Some (expn, xfrac) ->
         let expn = Word.signed expn in
         let digits = digits_of_precision a.base (bits_in expn) a.prec in
@@ -695,7 +610,7 @@ let div ?(rm=Nearest_even) a b =
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> mk_nan ~base:a.base ~negative:true a.prec
+  | Inf, Inf -> nan ~radix:a.base ~negative:true a.prec
   | Inf, _ -> a
   | _, Inf -> b
 
@@ -716,16 +631,16 @@ let truncate_exn ?(rm=Nearest_even) ~upto a =
   Option.value_exn (truncate ~rm ~upto a)
 
 let sqrt ?(rm=Nearest_even) a = match a.value with
-  | Fin x when is_neg a -> mk_nan ~base:a.base ~negative:true a.prec
+  | Fin x when is_neg a -> nan ~radix:a.base ~negative:true a.prec
   | Fin x when is_zero a -> a
   | Fin x ->
     let x = minimize_exponent a.base x in
     let expn,frac = x.expn, x.frac in
     let frac = Word.(concat (zero a.prec) x.frac) in
-    let s = mk ~base:a.base expn frac in
+    let s = create ~radix:a.base expn frac in
     let two =
       let expn = Word.zero (bits_in expn) in
-      mk ~base:a.base expn (Word.of_int ~width:(bits_in frac) 2) in
+      create ~radix:a.base expn (Word.of_int ~width:(bits_in frac) 2) in
     let init = div ~rm s two in
     let max = a.prec in
     let rec run x0 n =
@@ -736,7 +651,7 @@ let sqrt ?(rm=Nearest_even) a = match a.value with
         run x' (n + 1)
       else x0 in
     truncate_exn (run init 0) ~upto:a.prec
-  | Inf when is_neg a -> mk_nan ~base:a.base ~negative:true a.prec
+  | Inf when is_neg a -> nan ~radix:a.base ~negative:true a.prec
   | _ -> a
 
 let equal a b =
@@ -753,3 +668,18 @@ let equal a b =
     | Nan (s,payload), Nan (s', payload') ->
       Word.equal payload payload' && Bool.equal s s'
     | _ -> false
+
+let round ?(rm=Nearest_even) ~precision a =
+  match truncate ~rm ~upto:precision a with
+  | Some x -> x
+  | None ->
+    let negative = a.sign = Neg in
+    inf ~negative ~radix:a.base precision
+
+module Infix = struct
+  let ( + ) = add ~rm:Nearest_even
+  let ( - ) = sub ~rm:Nearest_even
+  let ( * ) = mul ~rm:Nearest_even
+  let ( / ) = div ~rm:Nearest_even
+  let ( = ) = equal
+end

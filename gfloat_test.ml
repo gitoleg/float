@@ -47,19 +47,19 @@ let t_of_bits {expn_width;bias;frac_width;int_bit} bits =
   let frac = Word.extract_exn ~hi:hi_frac bits in
   let expn' = Word.to_int_exn expn_bits - bias in
   if all_ones expn_bits && Word.is_zero frac then
-    mk_inf ~base:2 precs ~negative
+    inf ~radix:2 precs ~negative
   else if all_ones expn_bits then
-    mk_nan ~base:2 precs
+    nan ~radix:2 precs
   else if all_zeros expn_bits && all_zeros frac then
     let expn = Word.of_int ~width:expn_width expn' in
-    mk ~base:2 ~negative expn (Word.concat Word.b0 frac)
+    create ~radix:2 ~negative expn (Word.concat Word.b0 frac)
   else
     let dexp = Word.bitwidth frac in
     let ibit = if all_zeros expn_bits && all_zeros frac then Word.b0
       else Word.b1 in
     let expn = Word.of_int ~width:expn_width (expn' - dexp) in
     let frac = if int_bit then frac else Word.concat ibit frac in
-    mk ~base:2 ~negative expn frac
+    create ~radix:2 ~negative expn frac
 
 let single_of_float f =
   let bits = Word.of_int32 (Int32.bits_of_float f) in
@@ -240,19 +240,19 @@ let truncate str =
     is_neg, Word.string_of_value ~hex:false frac, expn
 
 let decimal_of_string = function
-  | "nan" -> mk_nan ~base:10 decimal_precision
-  | "inf" -> mk_inf ~base:10 decimal_precision
-  | "-inf" -> mk_inf ~base:10 decimal_precision ~negative:true
+  | "nan" -> nan ~radix:10 decimal_precision
+  | "inf" -> inf ~radix:10 decimal_precision
+  | "-inf" -> inf ~radix:10 decimal_precision ~negative:true
   | str ->
     let negative, frac,expn = truncate str in
     if is_zero_float frac then
-      mk ~base:10 ~negative
+      create ~radix:10 ~negative
         (Word.zero decimal_expn_bits)
         (Word.zero decimal_precision)
     else
       let frac = Word.of_string (sprintf "%s:%du" frac decimal_precision) in
       let expn = Word.of_int ~width:decimal_expn_bits expn in
-      mk ~base:10 ~negative expn frac
+      create ~radix:10 ~negative expn frac
 
 let truncate_float f =
   let is_neg, x,e = truncate (str_of_float f) in
