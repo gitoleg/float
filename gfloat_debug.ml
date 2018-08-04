@@ -151,24 +151,9 @@ let compare_str x y =
 (*   let ( / ) = div *)
 (*   let ( sqrt ) = sqrt *)
 
-(*   let sin x = *)
-(*     let real = ocaml_sin x in *)
-(*     let res = gen_sin double_of_float float_of_double x in *)
-(*     if not (equal_base2 real res) then *)
-(*       let bs = bitstring_of_float in *)
-(*       let real_str = str_of_float real in *)
-(*       let res_str = str_of_float res in *)
-(*       let () = printf "cmp:\n %s <- expected (%f)\n %s <- what we got\n" *)
-(*           (bs real) real (bs res) in *)
-(*       printf "FAIL: base 2, sin %f <> %f, real %s <> %s\n" *)
-(*         x res real_str res_str *)
-(*     else printf "OK!\n" *)
+end
 
-(*   let () = sin 0.5 *)
-
-(* end *)
-
-(* module Run = Run_manually(struct type t = () end) *)
+module Run = Run_manually(struct type t = () end)
 
 
 module Debug = struct

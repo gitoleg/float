@@ -29,6 +29,13 @@ let enum_bits w =
     Seq.drop bits (b_len - w_len)
   else bits
 
+let string_of_bits w =
+  let bits = enum_bits w in
+  let (@@) = sprintf "%s%d" in
+  Seq.fold bits ~init:"" ~f:(fun s x ->
+      if x then s @@ 1
+      else s @@ 0)
+
 let msb w =
   let bits = enum_bits w in
   match Seq.findi bits ~f:(fun i x -> x) with
@@ -313,7 +320,7 @@ let gen_sin of_float to_float arg =
 
 (* we will compute a real sin x like bellow, i.e.
    like we do it for gfloat above, because
-   we can't assume that implementation behind
+   we can't rely on assumption that implementation behind
    Pervasives.sin is the same as ours *)
 let ocaml_sin arg =
   let rec run res n =
@@ -529,6 +536,28 @@ let suite () =
     "inf  / nan"  >:: inf  /$ nan;
     "-inf / inf"  >:: ninf /$ inf;
     "inf  / -inf" >:: inf  /$ ninf;
+    "1.0 / 1.1"   >:: 1.0 / 1.1;
+    "1.0 / 1.12"   >:: 1.0 / 1.12;
+    "1.0 / 1.123"   >:: 1.0 / 1.123;
+    "1.0 / 1.1234"   >:: 1.0 / 1.1234;
+    "1.0 / 1.12345"   >:: 1.0 / 1.12345;
+    "1.0 / 1.123456"   >:: 1.0 / 1.123456;
+    "1.0 / 1.1234567"   >:: 1.0 / 1.1234567;
+    "1.0 / 1.12345678"   >:: 1.0 / 1.12345678;
+    "1.0 / 1.123456789"   >:: 1.0 / 1.123456789;
+    "1.0 / 1.1234567891"   >:: 1.0 / 1.1234567891;
+    "1.0 / 1.12345678912"   >:: 1.0 / 1.12345678912;
+    "1.0 / 1.123456789123"   >:: 1.0 / 1.123456789123;
+
+    "1.1 / 0.9"   >:: 1.1 / 0.9;
+    "1.1 / 0.99"   >:: 1.1 / 0.99;
+    "1.1 / 0.999"   >:: 1.1 / 0.999;
+    "1.1 / 0.9999"   >:: 1.1 / 0.9999;
+    "1.1 / 0.99999"   >:: 1.1 / 0.99999;
+    "1.1 / 0.999999"   >:: 1.1 / 0.999999;
+    "1.1 / 0.9999999"   >:: 1.1 / 0.9999999;
+
+
 
     (* sqrt  *)
     "sqrt 423245.0" >:: sqrt 423245.0;
@@ -545,11 +574,12 @@ let suite () =
     "sqrt inf"      >:: sqrt_special inf;
     "sqrt -inf"     >:: sqrt_special ninf;
 
-    (* sin  *)
+    (* sin - just test that is could be implemented *)
     "sin 0.0"       >:: sin 0.0;
     "sin 0.5"       >:: sin 0.5;
     "sin 1.0"       >:: sin 1.0;
     "sin 0.5216..." >:: sin 0.52167823455675756576;
+    "sin 0.023345"  >:: sin 0.0232345;
   ]
 
 let () = run_test_tt_main (suite ())
