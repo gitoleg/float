@@ -547,19 +547,6 @@ let expn_dif x y =
   if is_pos x && is_neg y && Word.(e < x) then `Underflow_expn
   else `Nice e
 
-let string_of_loss a = Sexp.to_string (sexp_of_loss a)
-
-let ws = Word.to_string
-let wi = Word.to_int_exn
-let wdec = Word.string_of_value ~hex:false
-
-let sb w =
-  let bits = enum_bits w in
-  let (@@) = sprintf "%s%d" in
-  Seq.fold bits ~init:"" ~f:(fun s x ->
-      if x then s @@ 1
-      else s @@ 0)
-
 let div ?(rm=Nearest_even) a b =
   let zero expn_bits =
     { expn=Word.zero expn_bits; frac = Word.zero a.prec } in
