@@ -86,10 +86,14 @@ let normalize_ieee bias biased_expn frac =
       norm_expn (succ expn) Word.(frac lsr b1)
     else expn, frac in
   let norm_frac expn frac =
+    let len = Word.bitwidth frac in
+    let unos = Word.ones len in
+    if Word.(frac = unos) then
+      expn + 1, Word.zero len
+    else
     match msb frac with
     | None -> expn, frac
     | Some i ->
-      let len = Word.bitwidth frac in
       let shift = len - i - 1 in
       let shift' = Word.of_int ~width:len shift in
       let frac = Word.(frac lsl shift') in
@@ -104,7 +108,9 @@ let bits_of_t kind t =
   let total = kind.expn_width + kind.frac_width + 1 in
   let total = if kind.int_bit then total + 1 else total in
   let (^) = Word.concat in
-  if is_zero t then Word.zero total
+  if is_zero t then
+    let bits = Word.zero (total - 1) in
+    sign_bit t ^ bits
   else if is_fin t then
     let expn, frac = Option.value_exn (fin t) in
     let expn = Word.to_int_exn expn in
@@ -129,6 +135,25 @@ let float_of_single t =
   let bits = bits_of_t single t in
   let bits = Word.signed bits |> Word.to_int32_exn in
   Int32.float_of_bits bits
+
+
+let enum_bits w =
+  let bits = Word.enum_bits w BigEndian in
+  let b_len = Seq.length bits in
+  let w_len = Word.bitwidth w in
+  if b_len > w_len then
+    Seq.drop bits (b_len - w_len)
+  else bits
+
+let string_of_bits w =
+  let bits = enum_bits w in
+  let (@@) = sprintf "%s%d" in
+  Seq.fold bits ~init:"" ~f:(fun s x ->
+      if x then s @@ 1
+      else s @@ 0)
+
+let sb = string_of_bits
+let sbf x = sb (Word.of_int64 (Int64.bits_of_float x))
 
 let float_of_double t =
   let bits = bits_of_t double t in
@@ -163,8 +188,7 @@ let enum_bits w =
   else bits
 
 let msb w =
-  let bits = enum_bits w in
-  match Seq.findi bits ~f:(fun i x -> x) with
+  match Seq.findi (enum_bits w) ~f:(fun i x -> x) with
   | None -> None
   | Some (i,_) -> Some (Word.bitwidth w - i - 1)
 
@@ -289,6 +313,7 @@ let factorial x =
     else r in
   loop x (x - 1)
 
+(* just an arbitary number  *)
 let max_n = 50
 
 let gfloat_pow of_float x n =
@@ -298,13 +323,17 @@ let gfloat_pow of_float x n =
   if n = 0 then of_float 1.0
   else loop x 1
 
-let gen_sin of_float to_float arg =
+let gen_sin of_float to_float ~prec arg =
+  let ext x = extend x prec in
+  let of_float x = ext @@ of_float x in
+  let to_float x = round x ~precision:prec |> to_float in
   let pow = gfloat_pow of_float in
   let of_int_opt x =
     try Some (of_float (float_of_int x))
     with _ -> None in
   let arg = of_float arg in
   let mone = of_float (~-. 1.0) in
+  let zero = of_float 0.0 in
   let rec run res n =
     if n < max_n then
       let s = pow mone n in
@@ -316,23 +345,7 @@ let gen_sin of_float to_float arg =
           run res' (n + 1)
         else res
     else res in
-  run (of_float 0.0) 0 |> to_float
-
-(* we will compute a real sin x like bellow, i.e.
-   like we do it for gfloat above, because
-   we can't rely on assumption that implementation behind
-   Pervasives.sin is the same as ours *)
-let ocaml_sin arg =
-  let rec run res n =
-    if n < max_n then
-      let s = (~-. 1.0) ** float_of_int n in
-      let f = float_of_int (factorial (2 * n + 1)) in
-      let x = arg ** float_of_int (2 * n + 1) in
-      let res' = res +. (x *. s /. f) in
-      if Float.is_nan res' || Float.is_inf res' then res
-      else run res' (n + 1)
-    else res in
-  run 0.0 0
+  run zero 0 |> to_float
 
 let gen_binop of_float to_float op x y =
   op (of_float x) (of_float y) |> to_float
@@ -353,7 +366,11 @@ let equal_base2 x y =
   let y = Int64.bits_of_float y in
   Int64.equal x y
 
-let string_equal real ours =
+let string_equal1 real ours =
+  let real = truncate_zeros (string_of_float real) in
+  String.equal real (truncate_zeros ours)
+
+let string_equal2 real ours =
   let ours = truncate_zeros ours in
   let len = String.length ours in
   let f x =
@@ -361,35 +378,72 @@ let string_equal real ours =
     | None -> x
     | Some i when i < len - 2 ->
       String.subo ~len:(len - 1) x
-    | _ ->
-      String.subo ~len:len  x in
+    | _ -> String.subo ~len:len  x in
   String.equal (f real) (f ours)
 
-let string_equal' real ours =
+let string_equal3 real ours =
   let real_plus = real +. Float.epsilon_float |> str_of_float in
   let real_mins = real -. Float.epsilon_float |> str_of_float in
-  string_equal real_plus ours ||
-  string_equal real_mins ours
+  string_equal2 real_plus ours ||
+  string_equal2 real_mins ours
+
+let string_equal4 real ours =
+  let real = truncate_zeros (sprintf "%f" real) in
+  let ours = truncate_zeros ours in
+  let len = String.length real in
+  let ours = String.subo ~len ours in
+  String.equal real (String.subo ~len ours)
 
 let equal_base10 real ours =
-  string_equal (str_of_float real) ours ||
-  string_equal' real ours
+  string_equal1 real ours ||
+  string_equal2 (str_of_float real) ours ||
+  string_equal3 real ours ||
+  string_equal4 real ours
 
 let equal_base2 x y =
-  let x = Int64.bits_of_float x in
-  let y = Int64.bits_of_float y in
-  Int64.equal x y
+  let bits = Int64.bits_of_float in
+  Int64.equal (bits x) (bits y)
 
-let binop op op' x y ctxt =
-  let real2 = op x y in
-  let r2 = base2_binop op' x y in
-  assert_equal ~ctxt ~cmp:equal_base2 real2 r2;
+type binop = [ `Add | `Sub | `Mul | `Div ]
+
+let string_of_binop op x y =
+  let op = match op with
+    | `Add -> "+"
+    | `Sub -> "-"
+    | `Mul -> "*"
+    | `Div -> "/" in
+  sprintf "%.5f %s %.5f" x op y
+
+(* returns real and ours binop *)
+let get_binop = function
+  | `Add -> (+.), add
+  | `Sub -> (-.), sub
+  | `Mul -> ( *.), mul
+  | `Div -> ( /.), div
+
+let is_ok_binop2 op x y =
+  let op_real,op_ours = get_binop op in
+  let real = op_real x y in
+  let ours = base2_binop op_ours x y in
+  equal_base2 real ours
+
+let is_ok_binop10 op x y =
+  let op_real,op_ours = get_binop op in
   let x = truncate_float x in
   let y = truncate_float y in
-  let real10 = op x y in
-  let r10 = base10_binop op' x y in
-  let equal = equal_base10 real10 r10 in
-  assert_bool "binop base 10 failed" equal
+  let real = op_real x y in
+  let ours = base10_binop op_ours x y in
+  equal_base10 real ours
+
+let binop op x y ctxt =
+  let op_str = string_of_binop op x y in
+  let () =
+    if not (is_ok_binop2 op x y) then
+      let error = sprintf "%s failed for radix 2" op_str in
+      assert_bool error false in
+  if not (is_ok_binop10 op x y) then
+    let error = sprintf "%s failed for radix 10" op_str in
+    assert_bool error false
 
 let binop_special op op' x y ctxt =
   let real = str_of_float (op x y) in
@@ -408,11 +462,14 @@ let unop op op' x ctxt =
   let equal = equal_base10 real10 r10 in
   assert_bool "unop base 10 failed" equal
 
+let sin2  = gen_sin double_of_float float_of_double ~prec:53
+let sin10 = gen_sin decimal_of_float string_of_decimal ~prec:decimal_precision
+
 let sin x ctxt =
-  let real = ocaml_sin x in
-  let r2 = gen_sin double_of_float float_of_double x in
+  let real = Pervasives.sin x in
+  let r2 = sin2 x in
   assert_equal ~ctxt ~cmp:equal_base2 real r2;
-  let r10 = gen_sin decimal_of_float string_of_decimal x in
+  let r10 = sin10 x in
   let equal = equal_base10 real r10 in
   assert_bool "sin base 10 failed" equal
 
@@ -429,10 +486,10 @@ let mul_special x y ctxt = binop_special ( *. ) mul x y ctxt
 let div_special x y ctxt = binop_special ( /. ) div x y ctxt
 let sqrt_special x ctxt = unop_special Float.sqrt sqrt x ctxt
 
-let add x y ctxt = binop (+.) add x y ctxt
-let sub x y ctxt = binop (-.) sub x y ctxt
-let mul x y ctxt = binop ( *. ) mul x y ctxt
-let div x y ctxt = binop ( /. ) div x y ctxt
+let add x y ctxt = binop `Add x y ctxt
+let sub x y ctxt = binop `Sub x y ctxt
+let mul x y ctxt = binop `Mul x y ctxt
+let div x y ctxt = binop `Div x y ctxt
 let sqrt x ctxt = unop Float.sqrt sqrt x ctxt
 
 let ( + ) = add
@@ -447,6 +504,44 @@ let ( *$ ) = mul_special
 let ( /$ ) = div_special
 
 let neg x = ~-.x
+
+let random times ctxt =
+  let binop op (x, (init_x, init_px)) (y, (init_y, init_py)) ctxt =
+    if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
+    else
+      let op_str = sprintf "%s, (x: %d / 10^^ %d) (x: %d / 10^^ %d)"
+          (string_of_binop op x y) init_x init_px init_y init_py in
+      let () =
+        if not (is_ok_binop2 op x y) then
+          let error = sprintf "%s failed for radix 2" op_str in
+          assert_bool error false in
+      () in
+      (* if not (is_ok_binop10 op x y) then *)
+      (*   let error = sprintf "%s failed for radix 10" op_str in *)
+      (*   assert_bool error false in *)
+  let () = Random.self_init () in
+  let random max = Random.int max in
+  let random_elt xs = List.nth_exn xs @@ random (List.length xs) in
+  let sign x = (random_elt [ident; (fun x -> ~-. x)]) x in
+  let int () = Random.int 10000 in
+  let float () =
+    let a = int () in
+    let s = String.length (string_of_int a) in
+    let p = Random.int Caml.(2 * s) in
+    let x = if p = 0 then float_of_int a
+      else
+        let p = 10.0 ** float_of_int p in
+        float_of_int a /. p in
+    let meta = a,p in
+    sign x, meta in
+  let rec run n =
+    if n < times then
+      let op = random_elt [`Add;`Sub;`Mul; `Div] in
+      let x = float () in
+      let y = float () in
+      let () = binop op x y ctxt in
+      run Caml.(n + 1) in
+  run 0
 
 let suite () =
 
@@ -557,8 +652,6 @@ let suite () =
     "1.1 / 0.999999"   >:: 1.1 / 0.999999;
     "1.1 / 0.9999999"   >:: 1.1 / 0.9999999;
 
-
-
     (* sqrt  *)
     "sqrt 423245.0" >:: sqrt 423245.0;
     "sqrt 0.213"    >:: sqrt 0.213;
@@ -580,6 +673,12 @@ let suite () =
     "sin 1.0"       >:: sin 1.0;
     "sin 0.5216..." >:: sin 0.52167823455675756576;
     "sin 0.023345"  >:: sin 0.0232345;
+    "sin 0.423890723482"  >:: sin 0.423890723482;
+    "sin 0.000000042"  >:: sin 0.000000042;
+
+    (* random - +,-,*,/ with a random operands *)
+    "random " >:: random 100000;
+
   ]
 
 let () = run_test_tt_main (suite ())
