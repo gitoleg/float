@@ -53,6 +53,8 @@ let msb w =
 
 let bits_in = Word.bitwidth
 
+let string_of_loss x = Sexp.to_string (sexp_of_loss x)
+
 (* returns a list of digits in [loss], most significant first *)
 let lost_digits base loss n =
   let to_digit x : digit =
@@ -242,7 +244,8 @@ let zero ~radix ~expn_bits prec =
 
 let create ~radix ?(negative=false) expn frac =
   if Word.is_zero frac then
-    zero ~radix ~expn_bits:(bits_in expn) (bits_in frac)
+    let x = zero ~radix ~expn_bits:(bits_in expn) (bits_in frac) in
+    if negative then {x with sign = Neg} else x
   else
     let sign = if negative then Neg else Pos in
     let expn = Word.signed expn in
@@ -312,6 +315,25 @@ let is_neg x = match x.sign with
   | Neg -> true
   | Pos -> false
 
+let check_operands a b =
+  if Int.(a.base <> b.base) || Int.(a.prec <> b.prec) then
+    failwith "attempting to operate with a differrent radix/precision"
+
+let equal a b =
+  check_operands a b;
+  if a.sign <> b.sign then false
+  else
+    match a.data, b.data with
+    | Fin x, Fin y ->
+      let x = norm a.base x in
+      let y = norm a.base y in
+      Word.equal x.expn y.expn &&
+      Word.equal x.frac y.frac
+    | Inf, Inf -> a.sign = b.sign
+    | Nan (s,payload), Nan (s', payload') ->
+      Word.equal payload payload' && Bool.equal s s'
+    | _ -> false
+
 let revert_sign = function
   | Pos -> Neg
   | Neg -> Pos
@@ -356,10 +378,6 @@ let combine_loss more less =
   | ExactlyZero,_ -> LessThanHalf
   | ExactlyHalf,_ -> MoreThanHalf
   | _ -> more
-
-let check_operands a b =
-  if Int.(a.base <> b.base) || Int.(a.prec <> b.prec) then
-    failwith "attempting to operate with a differrent base/precision"
 
 let neg x = {x with sign = revert_sign x.sign}
 let extend x addend = { x with frac = Word.(concat (zero addend) x.frac) }
@@ -436,11 +454,12 @@ let sub rm a b =
     let expn,frac,loss' =
       align_right_exn ~base:a.base ~precision:a.prec x.expn frac in
     let loss = if Word.equal x.expn expn then loss
-          else combine_loss loss' loss in
+      else combine_loss loss' loss in
     let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
     let frac = round rm sign frac loss in
     let data = Fin (norm a.base {expn; frac}) in
-    {a with data; sign}
+    let a = {a with data; sign} in
+    if is_zero a then {a with sign = Pos} else a
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
@@ -472,6 +491,10 @@ let expn_sum x y =
 let mul ?(rm=Nearest_even) a b =
   check_operands a b;
   match a.data,b.data with
+  | Fin _, Fin _ when is_zero a ->
+    {a with sign = xor_sign a.sign b.sign;}
+  | Fin _, Fin _ when is_zero b ->
+    {b with sign = xor_sign a.sign b.sign}
   | Fin x, Fin y ->
     let x = minimize_exponent a.base x in
     let y = minimize_exponent a.base y in
@@ -523,13 +546,14 @@ let divide base digits start_dividend divisor =
       loop acc dividend (degree - 1)
     else List.rev acc, dividend in
   let res, left = loop [] start_dividend 0 in
+  let res = List.map res ~f:(fun (d, deg) -> d, deg + digits) in
+  let res = set_digits res in
   let loss =
     if Word.is_zero left then ExactlyZero
     else if Word.(left > divisor) then MoreThanHalf
     else if Word.(left = divisor) then ExactlyHalf
     else LessThanHalf in
-  let res = List.map res ~f:(fun (d, deg) -> d, deg + digits) in
-  set_digits res, loss
+  res, loss
 
 (* returns a maximum possible exponent for [precision], i.e.
    how many digits could fit in [precision] bits *)
@@ -564,7 +588,7 @@ let div ?(rm=Nearest_even) a b =
   | Fin x, Fin y when is_zero b -> {a with data = Inf}
   | Fin x, Fin y ->
     let x = minimize_exponent a.base x in
-    let y = maximize_exponent a.base y in
+    let y = minimize_exponent a.base y in
     let sign = xor_sign a.sign b.sign in
     let extend = Word.zero a.prec in
     let xfrac = Word.concat extend x.frac in
@@ -631,21 +655,6 @@ let sqrt ?(rm=Nearest_even) a = match a.data with
   | Inf when is_neg a -> nan ~radix:a.base ~negative:true a.prec
   | _ -> a
 
-let equal a b =
-  check_operands a b;
-  if a.sign <> b.sign then false
-  else
-    match a.data, b.data with
-    | Fin x, Fin y ->
-      let x = norm a.base x in
-      let y = norm a.base y in
-      Word.equal x.expn y.expn &&
-      Word.equal x.frac y.frac
-    | Inf, Inf -> a.sign = b.sign
-    | Nan (s,payload), Nan (s', payload') ->
-      Word.equal payload payload' && Bool.equal s s'
-    | _ -> false
-
 let round ?(rm=Nearest_even) ~precision a =
   match truncate ~rm ~upto:precision a with
   | Some x -> x
@@ -660,3 +669,9 @@ module Infix = struct
   let ( / ) = div ~rm:Nearest_even
   let ( = ) = equal
 end
+
+let extend a prec = match a.data with
+  | Fin x ->
+    let data = Fin (extend x prec) in
+    { a with data; prec = a.prec + prec }
+  | _ -> a

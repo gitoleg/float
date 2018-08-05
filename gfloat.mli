@@ -83,6 +83,9 @@ val neg : gfloat -> gfloat
 (** [round ~upto x] returns a rounded [x] to a [precision]. *)
 val round : ?rm:rounding -> precision:int -> gfloat -> gfloat
 
+(** [extend x n] extends precision of [x] with [n] bits *)
+val extend : gfloat -> int -> gfloat
+
 (** [equal x y] return true if [x = y] *)
 val equal : gfloat -> gfloat -> bool
 
