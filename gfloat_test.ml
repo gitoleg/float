@@ -387,18 +387,10 @@ let string_equal3 real ours =
   string_equal2 real_plus ours ||
   string_equal2 real_mins ours
 
-let string_equal4 real ours =
-  let real = truncate_zeros (sprintf "%f" real) in
-  let ours = truncate_zeros ours in
-  let len = String.length real in
-  let ours = String.subo ~len ours in
-  String.equal real (String.subo ~len ours)
-
 let equal_base10 real ours =
   string_equal1 real ours ||
   string_equal2 (str_of_float real) ours ||
-  string_equal3 real ours ||
-  string_equal4 real ours
+  string_equal3 real ours
 
 let equal_base2 x y =
   let bits = Int64.bits_of_float in
