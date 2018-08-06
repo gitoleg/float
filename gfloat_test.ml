@@ -405,6 +405,7 @@ let equal_base2 x y =
   Int64.equal (bits x) (bits y)
 
 type binop = [ `Add | `Sub | `Mul | `Div ]
+type unop = [ `Sqrt ]
 
 let string_of_binop op x y =
   let op = match op with
@@ -414,12 +415,20 @@ let string_of_binop op x y =
     | `Div -> "/" in
   sprintf "%.5f %s %.5f" x op y
 
+let string_of_unop op x =
+  let op = match op with
+    | `Sqrt -> "sqrt" in
+  sprintf "%s %.5f" op x
+
 (* returns real and ours binop *)
 let get_binop = function
   | `Add -> (+.), add
   | `Sub -> (-.), sub
   | `Mul -> ( *.), mul
   | `Div -> ( /.), div
+
+let get_unop = function
+  | `Sqrt -> Caml.sqrt, sqrt
 
 let is_ok_binop2 op x y =
   let op_real,op_ours = get_binop op in
@@ -452,15 +461,28 @@ let binop_special op op' x y ctxt =
   let r10 = base10_binop op' x y in
   assert_equal ~ctxt ~cmp:String.equal real r10
 
-let unop op op' x ctxt =
-  let real2 = op x in
-  let r2 = base2_unop op' x in
-  assert_equal ~ctxt ~cmp:equal_base2 real2 r2;
+let is_ok_unop2 op x =
+  let op_real, op_ours = get_unop op in
+  let real = op_real x in
+  let ours = base2_unop op_ours x in
+  equal_base2 real ours
+
+let is_ok_unop10 op x =
   let x = truncate_float x in
-  let real10 = op x in
-  let r10 = base10_unop op' x in
-  let equal = equal_base10 real10 r10 in
-  assert_bool "unop base 10 failed" equal
+  let op_real, op_ours = get_unop op in
+  let real = op_real x in
+  let ours = base10_unop op_ours x in
+  equal_base10 real ours
+
+let unop op x ctxt =
+  let op_str = string_of_unop op x in
+  let () =
+    if not (is_ok_unop2 op x) then
+      let error = sprintf "%s failed for radix 2" op_str in
+      assert_bool error false in
+  if not (is_ok_unop10 op x) then
+    let error = sprintf "%s failed for radix 10" op_str in
+    assert_bool error false
 
 let sin2  = gen_sin double_of_float float_of_double ~prec:53
 let sin10 = gen_sin decimal_of_float string_of_decimal ~prec:decimal_precision
@@ -490,7 +512,7 @@ let add x y ctxt = binop `Add x y ctxt
 let sub x y ctxt = binop `Sub x y ctxt
 let mul x y ctxt = binop `Mul x y ctxt
 let div x y ctxt = binop `Div x y ctxt
-let sqrt x ctxt = unop Float.sqrt sqrt x ctxt
+let sqrt x ctxt     = unop  `Sqrt x ctxt
 
 let ( + ) = add
 let ( - ) = sub
@@ -505,25 +527,20 @@ let ( /$ ) = div_special
 
 let neg x = ~-.x
 
-let random times ctxt =
+let random2 ~times ctxt =
   let binop op (x, (init_x, init_px)) (y, (init_y, init_py)) ctxt =
     if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
     else
       let op_str = sprintf "%s, (x: %d / 10^^ %d) (x: %d / 10^^ %d)"
           (string_of_binop op x y) init_x init_px init_y init_py in
-      let () =
-        if not (is_ok_binop2 op x y) then
-          let error = sprintf "%s failed for radix 2" op_str in
-          assert_bool error false in
-      () in
-      (* if not (is_ok_binop10 op x y) then *)
-      (*   let error = sprintf "%s failed for radix 10" op_str in *)
-      (*   assert_bool error false in *)
+      if not (is_ok_binop2 op x y) then
+        let error = sprintf "%s failed for radix 2" op_str in
+        assert_bool error false in
   let () = Random.self_init () in
   let random max = Random.int max in
   let random_elt xs = List.nth_exn xs @@ random (List.length xs) in
   let sign x = (random_elt [ident; (fun x -> ~-. x)]) x in
-  let int () = Random.int 10000 in
+  let int () = Random.int 1000000 in
   let float () =
     let a = int () in
     let s = String.length (string_of_int a) in
@@ -676,8 +693,8 @@ let suite () =
     "sin 0.423890723482"  >:: sin 0.423890723482;
     "sin 0.000000042"  >:: sin 0.000000042;
 
-    (* random - +,-,*,/ with a random operands *)
-    "random " >:: random 100000;
+    (* random - +,-,*,/ with a random operands for radix=2 *)
+    "random " >:: random2 ~times:10000;
 
   ]
 
