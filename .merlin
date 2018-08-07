@@ -1,5 +1,6 @@
+PKG zarith
+PKG oUnit
+PKG core_kernel
+
 S .
 B _build/
-
-PKG bap
-PKG oUnit

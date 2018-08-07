@@ -20,40 +20,6 @@ let inf_bits = Int64.bits_of_float Caml.infinity
 let ninf_bits = Int64.bits_of_float Caml.neg_infinity
 let nan_bits = Int64.bits_of_float Caml.nan
 
-let sb' w =
-  let open Bap.Std in
-  let enum_bits w =
-    let bits = Word.enum_bits w BigEndian in
-    let b_len = Seq.length bits in
-    let w_len = Word.bitwidth w in
-    if b_len > w_len then
-      Seq.drop bits (b_len - w_len)
-    else bits in
-  let sb_gen w =
-    let x = enum_bits w in
-    Seq.fold x ~init:"" ~f:(fun s b ->
-        let c = if b then "1" else "0" in
-        s ^ c) in
-  let sb64 w =
-    let bits = enum_bits w in
-    let (@@) = sprintf "%s%d" in
-    Seq.foldi bits ~init:"" ~f:(fun i acc x ->
-        let a =
-          if i = 1 || i = 12 then "_"
-          else "" in
-        let s = sprintf "%s%s" acc a in
-        if x then s @@ 1
-        else s @@ 0) in
-  if Word.bitwidth w = 64 then sb64 w else sb_gen w
-
-let sb ?w x =
-  let hi = match w with
-    | None -> 63
-    | Some x -> x - 1 in
-  sb' (Bap.Std.(Word.of_int64 x |> Word.extract_exn ~hi) )
-
-let sbz ?w x = sb ?w (Z.to_int64 x)
-
 let double_of_float x =
   let meta = meta ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
   let bits = Int64.bits_of_float x in
@@ -134,24 +100,6 @@ let float_of_double t =
   if is_neg t then Caml.neg_infinity
   else Caml.infinity
 
-let test_create x =
-  let bits = Int64.bits_of_float in
-  let bits' x =
-    double_of_float x |> float_of_double |> bits in
-  let bitsx = bits x in
-  let bitsx' = bits' x in
-  printf "create:\n %s <--- ideal\n %s\n\n" (sb bitsx) (sb bitsx')
-  (* Int64.(bits x = bits' x) *)
-
-let aa () =
-  let x = 1.0 in
-  let z = float_of_double @@ sqrt (double_of_float x)  in
-  printf "z is %f\n" z;
-  (* let z = float_of_double @@ mul (double_of_float x) (double_of_float y) in *)
-  printf "%s <-- ideal\n" (sb (Int64.bits_of_float (Caml.sqrt x)));
-  printf "%s <-- what we got\n" (sb (Int64.bits_of_float z))
-
-
 let truncate_zeros x =
   match String.index x '.' with
   | None -> x
@@ -159,6 +107,7 @@ let truncate_zeros x =
 
 let decimal_precision = 50
 let decimal_expn_bits = 10
+let decimal_meta = meta ~radix:10 ~expn_bits:decimal_expn_bits decimal_precision
 
 let log2 x = Float.log10 x /. Float.log10 2.0
 let pow2 x = int_of_float (2.0 ** float_of_int x)
@@ -171,9 +120,7 @@ let bits_of_digits n =
 let digits_of_bits n =
   String.length (sprintf "%d" (pow2 n - 1))
 
-let min_bits w = match msb w with
-  | None -> 0
-  | Some i -> i + 1
+let min_bits w = Z.numbits w
 
 let is_zero_float x =
   String.for_all x ~f:(fun c ->
@@ -181,110 +128,104 @@ let is_zero_float x =
 
 let str_of_float x = sprintf "%.16f" x
 
-(* let actual_bits x = *)
-(*   if String.is_empty x then 0 *)
-(*   else *)
-(*     let len = bits_of_digits (String.length x) in *)
-(*     let w = Word.of_string (sprintf "%s:%du" x len) *)
-(*     min_bits w *)
+let actual_bits x =
+  if String.is_empty x then 0
+  else min_bits (Z.of_string x)
 
-(* exception Not_created of string *)
+exception Not_created of string
 
-(* let check_int_part str = *)
-(*   let max_digits = digits_of_bits decimal_precision in *)
-(*   if (String.length str > max_digits) then *)
-(*     let err = sprintf "cat'n represent %s in %d bits" str *)
-(*         decimal_precision in *)
-(*     raise (Not_created err) *)
+let check_int_part str =
+  let max_digits = digits_of_bits decimal_precision in
+  if (String.length str > max_digits) then
+    let err = sprintf "cat'n represent %s in %d bits" str
+        decimal_precision in
+    raise (Not_created err)
 
-(* let rec adjust_base10 x expn bits = *)
-(*   if min_bits x <= bits then x,expn *)
-(*   else *)
-(*     let ten = Word.of_int ~width:(Word.bitwidth x) 10 in *)
-(*     adjust_base10 Word.(x / ten) (expn + 1) bits *)
+let rec adjust_base10 x expn bits =
+  if min_bits x <= bits then x,expn
+  else
+    let ten = Z.of_int 10 in
+    adjust_base10 Z.(x / ten) (expn + 1) bits
 
+let insert_point str expn =
+  let insert str before =
+    List.foldi (String.to_list str) ~init:[]
+      ~f:(fun i acc c ->
+          if i = before then c :: '.' :: acc
+          else c :: acc) |> List.rev |> String.of_char_list in
+  let len = String.length str in
+  if expn = 0 then str
+  else if is_zero_float str then "0.0"
+  else if expn < 0 && abs expn > len then
+    let zeros = String.init (abs expn - len + 1) ~f:(fun _ -> '0') in
+    let str = zeros ^ str in
+    insert str (String.length str - abs expn)
+  else if expn < 0 && abs expn = len then
+    let str = "0" ^ str in
+    insert str (len - abs expn + 1)
+  else if expn < 0 then
+    insert str (len - abs expn)
+  else if expn > 0 && expn > len then
+    let zeros = String.init (expn - len) ~f:(fun _ -> '0') in
+    let str = zeros ^ str in
+    insert str expn
+  else
+    let zeros = String.init expn ~f:(fun _ -> '0') in
+    let str = str ^ zeros in
+    insert str (len + expn)
 
-(* let insert_point str expn = *)
-(*   let insert str before = *)
-(*     List.foldi (String.to_list str) ~init:[] *)
-(*       ~f:(fun i acc c -> *)
-(*           if i = before then c :: '.' :: acc *)
-(*           else c :: acc) |> List.rev |> String.of_char_list in *)
-(*   let len = String.length str in *)
-(*   if expn = 0 then str *)
-(*   else if is_zero_float str then "0.0" *)
-(*   else if expn < 0 && abs expn > len then *)
-(*     let zeros = String.init (abs expn - len + 1) ~f:(fun _ -> '0') in *)
-(*     let str = zeros ^ str in *)
-(*     insert str (String.length str - abs expn) *)
-(*   else if expn < 0 && abs expn = len then *)
-(*     let str = "0" ^ str in *)
-(*     insert str (len - abs expn + 1) *)
-(*   else if expn < 0 then *)
-(*     insert str (len - abs expn) *)
-(*   else if expn > 0 && expn > len then *)
-(*     let zeros = String.init (expn - len) ~f:(fun _ -> '0') in *)
-(*     let str = zeros ^ str in *)
-(*     insert str expn *)
-(*   else *)
-(*     let zeros = String.init expn ~f:(fun _ -> '0') in *)
-(*     let str = str ^ zeros in *)
-(*     insert str (len + expn) *)
+let truncate str =
+  let x = truncate_zeros str in
+  let is_neg = List.hd_exn (String.to_list x) = '-' in
+  let start, point =
+    let p = String.index_exn x '.' in
+    if is_neg then 1, p
+    else 0, p in
+  let base = String.subo ~pos:start ~len:(point - start) x in
+  let remd = String.subo ~pos:(point + 1) x in
+  let expn = - (String.length remd) in
+  check_int_part base;
+  let bits = actual_bits (base ^ remd) in
+  if bits = 0 then is_neg, str, expn
+  else
+    let frac = Z.of_string (base ^ remd) in
+    let frac,expn = adjust_base10 frac expn decimal_precision in
+    let frac = Z.extract frac 0 decimal_precision in
+    is_neg, Z.to_string frac, expn
 
-(* let truncate str = *)
-(*   let x = truncate_zeros str in *)
-(*   let is_neg = List.hd_exn (String.to_list x) = '-' in *)
-(*   let start, point = *)
-(*     let p = String.index_exn x '.' in *)
-(*     if is_neg then 1, p *)
-(*     else 0, p in *)
-(*   let base = String.subo ~pos:start ~len:(point - start) x in *)
-(*   let remd = String.subo ~pos:(point + 1) x in *)
-(*   let expn = - (String.length remd) in *)
-(*   check_int_part base; *)
-(*   let bits = actual_bits (base ^ remd) in *)
-(*   if bits = 0 then is_neg, str, expn *)
-(*   else *)
-(*     let frac = Word.of_string (sprintf "%s%s:%du" base remd bits) in *)
-(*     let frac,expn = adjust_base10 frac expn decimal_precision in *)
-(*     let frac = Word.extract_exn ~hi:(decimal_precision - 1) frac in *)
-(*     is_neg, Word.string_of_value ~hex:false frac, expn *)
+let decimal_of_string = function
+  | "nan" -> nan decimal_meta
+  | "inf" -> inf decimal_meta
+  | "-inf" -> inf ~negative:true decimal_meta
+  | str ->
+    let negative, frac, expn = truncate str in
+    if is_zero_float frac then
+      create decimal_meta ~negative ~expn:Z.zero Z.zero
+    else
+      let frac = Z.of_string frac in
+      let expn = Z.of_int expn in
+      create decimal_meta ~negative ~expn frac
 
-(* let decimal_of_string = function *)
-(*   | "nan" -> nan ~radix:10 decimal_precision *)
-(*   | "inf" -> inf ~radix:10 decimal_precision *)
-(*   | "-inf" -> inf ~radix:10 decimal_precision ~negative:true *)
-(*   | str -> *)
-(*     let negative, frac,expn = truncate str in *)
-(*     if is_zero_float frac then *)
-(*       create ~radix:10 ~negative *)
-(*         (Word.zero decimal_expn_bits) *)
-(*         (Word.zero decimal_precision) *)
-(*     else *)
-(*       let frac = Word.of_string (sprintf "%s:%du" frac decimal_precision) in *)
-(*       let expn = Word.of_int ~width:decimal_expn_bits expn in *)
-(*       create ~radix:10 ~negative expn frac *)
+let truncate_float f =
+  let is_neg, x,e = truncate (str_of_float f) in
+  let x = float_of_string (insert_point x e) in
+  if is_neg then ~-. x
+  else x
 
-(* let truncate_float f = *)
-(*   let is_neg, x,e = truncate (str_of_float f) in *)
-(*   let x = float_of_string (insert_point x e) in *)
-(*   if is_neg then ~-. x *)
-(*   else x *)
+let decimal_of_float x = decimal_of_string (str_of_float x)
+let attach_sign x t = if is_neg t then ~-. x else x
 
-(* let decimal_of_float x = decimal_of_string (str_of_float x) *)
-(* let attach_sign x t = if is_neg t then ~-. x else x *)
+let string_of_decimal t =
+  let attach_sign x = if is_neg t then "-" ^ x else x in
+  if is_fin t then
+    let expn, frac = Option.value_exn (fin t) in
+    let expn = Z.to_int expn in
+    let frac = Z.to_string frac in
+    insert_point frac expn |> attach_sign
+  else if is_nan t then attach_sign "nan"
+  else attach_sign "inf"
 
-(* let string_of_decimal t = *)
-(*   let attach_sign x = if is_neg t then "-" ^ x else x in *)
-(*   if is_fin t then *)
-(*     let expn, frac = Option.value_exn (fin t) in *)
-(*     let expn = Word.to_int_exn (Word.signed expn) in *)
-(*     let frac = Word.string_of_value ~hex:false frac in *)
-(*     insert_point frac expn |> attach_sign *)
-(*   else if is_nan t then attach_sign "nan" *)
-(*   else attach_sign "inf" *)
-
-(* let float_of_decimal x = float_of_string (string_of_decimal x) *)
+let float_of_decimal x = float_of_string (string_of_decimal x)
 
 let factorial x =
   let rec loop r n =
@@ -344,34 +285,34 @@ let nan = Float.nan
 let inf = Float.infinity
 let ninf = Float.neg_infinity
 
-(* let string_equal1 real ours = *)
-(*   let real = truncate_zeros (string_of_float real) in *)
-(*   String.equal real (truncate_zeros ours) *)
+let string_equal1 real ours =
+  let real = truncate_zeros (string_of_float real) in
+  String.equal real (truncate_zeros ours)
 
-(* let string_equal2 real ours = *)
-(*   let ours = truncate_zeros ours in *)
-(*   let len = String.length ours in *)
-(*   let f x = *)
-(*     match String.index x '.' with *)
-(*     | None -> x *)
-(*     | Some i when i < len - 2 -> *)
-(*       String.subo ~len:(len - 1) x *)
-(*     | _ -> String.subo ~len:len  x in *)
-(*   String.equal (f real) (f ours) *)
+let string_equal2 real ours =
+  let ours = truncate_zeros ours in
+  let len = String.length ours in
+  let f x =
+    match String.index x '.' with
+    | None -> x
+    | Some i when i < len - 2 ->
+      String.subo ~len:(len - 1) x
+    | _ -> String.subo ~len:len  x in
+  String.equal (f real) (f ours)
 
-(* let string_equal3 real ours = *)
-(*   let real_plus = real +. Float.epsilon_float |> str_of_float in *)
-(*   let real_mins = real -. Float.epsilon_float |> str_of_float in *)
-(*   string_equal2 real_plus ours || *)
-(*   string_equal2 real_mins ours *)
+let string_equal3 real ours =
+  let real_plus = real +. Float.epsilon_float |> str_of_float in
+  let real_mins = real -. Float.epsilon_float |> str_of_float in
+  string_equal2 real_plus ours ||
+  string_equal2 real_mins ours
 
-(* let equal_base10 real ours = *)
-(*   string_equal1 real ours || *)
-(*   string_equal2 (str_of_float real) ours || *)
-(*   string_equal3 real ours *)
+let equal_base10 real ours =
+  string_equal1 real ours ||
+  string_equal2 (str_of_float real) ours ||
+  string_equal3 real ours
 
-(* let base10_binop = gen_binop decimal_of_float string_of_decimal *)
-(* let base10_unop = gen_unop decimal_of_float string_of_decimal *)
+let base10_binop = gen_binop decimal_of_float string_of_decimal
+let base10_unop = gen_unop decimal_of_float string_of_decimal
 
 
 type binop = [ `Add | `Sub | `Mul | `Div ]
@@ -404,22 +345,15 @@ let is_ok_binop2 op x y =
   let op_real,op_ours = get_binop op in
   let real = op_real x y in
   let ours = base2_binop op_ours x y in
-
-  let () = if not (equal_base2 real ours) then
-      let sb x = sb (Int64.bits_of_float x) in
-      printf "real: %f, ours: %f\n%s <-- ideal\n%s\n" real ours
-        (sb real) (sb ours) in
-
   equal_base2 real ours
 
-let is_ok_binop10 op x y = true
-(* let is_ok_binop10 op x y = *)
-(*   let op_real,op_ours = get_binop op in *)
-(*   let x = truncate_float x in *)
-(*   let y = truncate_float y in *)
-(*   let real = op_real x y in *)
-(*   let ours = base10_binop op_ours x y in *)
-(*   equal_base10 real ours *)
+let is_ok_binop10 op x y =
+  let op_real,op_ours = get_binop op in
+  let x = truncate_float x in
+  let y = truncate_float y in
+  let real = op_real x y in
+  let ours = base10_binop op_ours x y in
+  equal_base10 real ours
 
 let binop op x y ctxt =
   let op_str = string_of_binop op x y in
@@ -434,9 +368,9 @@ let binop op x y ctxt =
 let binop_special op op' x y ctxt =
   let real = str_of_float (op x y) in
   let ours = str_of_float (base2_binop op' x y) in
-  assert_equal ~ctxt ~cmp:String.equal real ours
-(*   let r10 = base10_binop op' x y in *)
-(*   assert_equal ~ctxt ~cmp:String.equal real r10 *)
+  assert_equal ~ctxt ~cmp:String.equal real ours;
+  let r10 = base10_binop op' x y in
+  assert_equal ~ctxt ~cmp:String.equal real r10
 
 let is_ok_unop2 op x =
   let op_real, op_ours = get_unop op in
@@ -444,13 +378,12 @@ let is_ok_unop2 op x =
   let ours = base2_unop op_ours x in
   equal_base2 real ours
 
-let is_ok_unop10 op x = true
-(* let is_ok_unop10 op x = *)
-(*   let x = truncate_float x in *)
-(*   let op_real, op_ours = get_unop op in *)
-(*   let real = op_real x in *)
-(*   let ours = base10_unop op_ours x in *)
-(*   equal_base10 real ours *)
+let is_ok_unop10 op x =
+  let x = truncate_float x in
+  let op_real, op_ours = get_unop op in
+  let real = op_real x in
+  let ours = base10_unop op_ours x in
+  equal_base10 real ours
 
 let unop op x ctxt =
   let op_str = string_of_unop op x in
@@ -463,22 +396,22 @@ let unop op x ctxt =
     assert_bool error false
 
 let sin2  = gen_sin double_of_float float_of_double ~prec:53
-(* let sin10 = gen_sin decimal_of_float string_of_decimal ~prec:decimal_precision *)
+let sin10 = gen_sin decimal_of_float string_of_decimal ~prec:decimal_precision
 
 let sin x ctxt =
   let real = Pervasives.sin x in
   let r2 = sin2 x in
-  assert_equal ~ctxt ~cmp:equal_base2 real r2
-(*   let r10 = sin10 x in *)
-(*   let equal = equal_base10 real r10 in *)
-(*   assert_bool "sin base 10 failed" equal *)
+  assert_equal ~ctxt ~cmp:equal_base2 real r2;
+  let r10 = sin10 x in
+  let equal = equal_base10 real r10 in
+  assert_bool "sin base 10 failed" equal
 
 let unop_special op op' x ctxt =
   let real = str_of_float (op x) in
   let r2 = str_of_float @@ base2_unop op' x in
-  assert_equal ~ctxt ~cmp:String.equal real r2
-(*   let r10 = base10_unop op' x in *)
-(*   assert_equal ~ctxt ~cmp:String.equal real r10 *)
+  assert_equal ~ctxt ~cmp:String.equal real r2;
+  let r10 = base10_unop op' x in
+  assert_equal ~ctxt ~cmp:String.equal real r10
 
 let add_special x y ctxt = binop_special (+.) add x y ctxt
 let sub_special x y ctxt = binop_special (-.) sub x y ctxt

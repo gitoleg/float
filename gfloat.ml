@@ -298,30 +298,6 @@ let zero meta =
   let data = {expn; frac} in
   {sign = Pos; meta; data = Fin data;}
 
-
-let sb' w =
-  let open Bap.Std in
-  let enum_bits w =
-    let bits = Word.enum_bits w BigEndian in
-    let b_len = Seq.length bits in
-    let w_len = Word.bitwidth w in
-    if b_len > w_len then
-      Seq.drop bits (b_len - w_len)
-     else bits in
-  let x = enum_bits w in
-  Seq.fold x ~init:"" ~f:(fun s b ->
-      let c = if b then "1" else "0" in
-      s ^ c)
-let sb ?w x =
-  let hi = match w with
-    | None -> 63
-    | Some x -> x - 1 in
-  sb' (Bap.Std.(Word.of_int64 x |> Word.extract_exn ~hi) )
-
-let sbz (w,z) = sb ~w (Z.to_int64 z)
-
-
-
 let create meta ?(negative=false) ~expn frac =
   let expn = Word.of_z ~width:meta.ebits expn in
   let frac = Word.of_z ~width:meta.fbits frac in
@@ -330,30 +306,8 @@ let create meta ?(negative=false) ~expn frac =
     if negative then {x with sign = Neg} else x
   else
     let sign = if negative then Neg else Pos in
-    let data = norm meta.radix {expn; frac} in
-
-    (* let () = *)
-    (*   let expn = Word.z data.expn |> Z.to_int64 in *)
-    (*   let frac = Word.z data.frac |> Z.to_int64 in *)
-    (*   let open Bap.Std in *)
-    (*   let expn = Word.of_int64 expn |> Word.extract_exn ~hi:10 in *)
-    (*   let frac = Word.of_int64 frac |> Word.extract_exn ~hi:52 in *)
-    (*   let enum_bits w = *)
-    (*     let bits = Word.enum_bits w BigEndian in *)
-    (*     let b_len = Seq.length bits in *)
-    (*     let w_len = Word.bitwidth w in *)
-    (*     if b_len > w_len then *)
-    (*       Seq.drop bits (b_len - w_len) *)
-    (*     else bits in *)
-    (*   let sb w = *)
-    (*     let bits = enum_bits w in *)
-    (*     let (@@) = sprintf "%s%d" in *)
-    (*     Seq.fold bits ~init:"" ~f:(fun s x -> *)
-    (*         if x then s @@ 1 *)
-    (*         else s @@ 0) in *)
-    (*   printf "i: %s_%s\n" (sb expn) (sb frac) in *)
-
-    {sign; meta; data = Fin data; }
+    let data = Fin (norm meta.radix {expn; frac}) in
+    {sign; meta; data; }
 
 let inf ?(negative=false) meta =
   let sign = if negative then Neg else Pos in
@@ -501,36 +455,10 @@ let add rm a b =
   check_operands a b;
   match a.data, b.data with
   | Fin x, Fin y ->
-    (* printf "input x: expn %d; frac: %s\n" *)
-    (*   (Word.z x.expn |> Z.to_int) *)
-    (*   (Word.z x.frac |> Z.to_int64 |> sb ~w:53); *)
-    (* printf "input y: expn %d; frac: %s\n" *)
-    (*   (Word.z y.expn |> Z.to_int) *)
-    (*   (Word.z y.frac |> Z.to_int64 |> sb ~w:53); *)
-
     let x = maximize_exponent (radix a) x in
     let y = maximize_exponent (radix a) y in
-
-    (* printf "max x: expn %d; frac: %s\n" *)
-    (*   (Word.z x.expn |> Z.to_int) *)
-    (*   (Word.z x.frac |> Z.to_int64 |> sb ~w:53); *)
-    (* printf "max y: expn %d; frac: %s\n" *)
-    (*   (Word.z y.expn |> Z.to_int) *)
-    (*   (Word.z y.frac |> Z.to_int64 |> sb ~w:53); *)
-
     let x,y,loss = common_ground (radix a) x y in
-
-    (* printf "common x: expn %d; frac: %s\n" *)
-    (*   (Word.z x.expn |> Z.to_int) *)
-    (*   (Word.z x.frac |> Z.to_int64 |> sb ~w:53); *)
-    (* printf "common y: expn %d; frac: %s\n" *)
-    (*   (Word.z y.expn |> Z.to_int) *)
-    (*   (Word.z y.frac |> Z.to_int64 |> sb ~w:53); *)
-
     let frac = Word.(x.frac + y.frac) in
-
-    (* let () = printf "res: %s\n" (sbz frac) in *)
-
     let data =
       if Word.(frac >= x.frac) then
         Fin (norm (radix a) {expn=x.expn; frac=round rm Pos frac loss})
