@@ -1,6 +1,4 @@
-open Bap.Std
-
-type gfloat
+type t
 
 type rounding =
   | Nearest_even  (** round to nearest, ties to even *)
@@ -9,91 +7,97 @@ type rounding =
   | Positive_inf  (** round toward positive infinity *)
   | Negative_inf  (** round toward negative infinity *)
 
+(** meta data *)
+type meta
+
+(** [meta : ~radix ~expn_bits fraction_bits] *)
+val meta : radix:int -> expn_bits:int -> int -> meta
+
 (** [create ~radix expn frac] creates gfloat from radix, signed expn
     and fraction.  *)
-val create : radix:int -> ?negative:bool -> word -> word -> gfloat
+val create : meta -> ?negative:bool -> expn:Z.t -> Z.t -> t
 
 (** [zero ~radix expn_bits prec] creates gfloat equaled to zero from
     radix, exponent bits and precision *)
-val zero : radix:int -> expn_bits:int -> int -> gfloat
+val zero : meta -> t
 
 (** [inf ~radix prec] creates positive or negative infinity from radix
     and precision *)
-val inf : radix:int -> ?negative:bool -> int -> gfloat
+val inf : ?negative:bool -> meta -> t
 
 (** [nan ~radix prec] creates nan from radix and precision. *)
-val nan : ?signaling:bool -> ?negative:bool -> ?payload:word -> radix:int -> int -> gfloat
+val nan : ?signaling:bool -> ?negative:bool -> ?payload:Z.t -> meta -> t
 
 (** [is_fin x] returns true if [x] is finite number, i.e. neither nan
     nor inf *)
-val is_fin : gfloat -> bool
+val is_fin : t -> bool
 
 (** [is_nan x] returns true if [x] is nan *)
-val is_nan : gfloat -> bool
+val is_nan : t -> bool
 
 (** [is_signaling_nan x] returns true if [x] is nan and it's a
     signaling one *)
-val is_signaling_nan : gfloat -> bool
+val is_signaling_nan : t -> bool
 
 (** [is_quite_nan x] returns true if [x] is nan and it's a
     quite one *)
-val is_quite_nan : gfloat -> bool
+val is_quite_nan : t -> bool
 
 (** [is_inf x] returns true if [x] is inf *)
-val is_inf : gfloat -> bool
+val is_inf : t -> bool
 
 (** [is_pos x] returns true if [x] is positive *)
-val is_pos : gfloat -> bool
+val is_pos : t -> bool
 
 (** [is_neg x] returns true if [x] is negative *)
-val is_neg : gfloat -> bool
+val is_neg : t -> bool
 
 (** [is_zero x] returns true if [x] is zero *)
-val is_zero : gfloat -> bool
+val is_zero : t -> bool
 
 (** [fin x] returns an exponent and fraction of [x], if
     [x] is finite number, i.e. neither infinity, nor nan *)
-val fin : gfloat -> (word * word) option
+val fin : t -> (Z.t * Z.t) option
 
 (** [frac x] returns a fraction of a finite number or
     a payload of a nan *)
-val frac : gfloat -> word option
+val frac : t -> Z.t option
 
 (** [expn x] returns a exponent of a finite number *)
-val expn : gfloat -> word option
+val expn : t -> Z.t option
 
 (** [add ~rm x y] = x + y with rounding [rm] *)
-val add : ?rm:rounding -> gfloat -> gfloat -> gfloat
+val add : ?rm:rounding -> t -> t -> t
 
 (** [sub ~rm x y] = x - y with rounding [rm] *)
-val sub : ?rm:rounding -> gfloat -> gfloat -> gfloat
+val sub : ?rm:rounding -> t -> t -> t
 
 (** [mul ~rm x y] = x * y with rounding [rm]  *)
-val mul : ?rm:rounding -> gfloat -> gfloat -> gfloat
+val mul : ?rm:rounding -> t -> t -> t
 
 (** [div ~rm x y] = x / y with rounding [rm]  *)
-val div : ?rm:rounding -> gfloat -> gfloat -> gfloat
+val div : ?rm:rounding -> t -> t -> t
 
 (** [sqrt x] returns a square root of [x] with rounding [rm] *)
-val sqrt : ?rm:rounding -> gfloat -> gfloat
+val sqrt : ?rm:rounding -> t -> t
 
 (** [neg x] inverts sign of [x]  *)
-val neg : gfloat -> gfloat
+val neg : t -> t
 
 (** [round ~upto x] returns a rounded [x] to a [precision]. *)
-val round : ?rm:rounding -> precision:int -> gfloat -> gfloat
+val round : ?rm:rounding -> precision:int -> t -> t
 
 (** [extend x n] extends precision of [x] with [n] bits *)
-val extend : gfloat -> int -> gfloat
+val extend : t -> int -> t
 
 (** [equal x y] return true if [x = y] *)
-val equal : gfloat -> gfloat -> bool
+val equal : t -> t -> bool
 
 (** A set of infix operators with default rounding = NearestTiesToEven *)
 module Infix : sig
-  val ( + ) : gfloat -> gfloat -> gfloat
-  val ( - ) : gfloat -> gfloat -> gfloat
-  val ( * ) : gfloat -> gfloat -> gfloat
-  val ( / ) : gfloat -> gfloat -> gfloat
-  val ( = ) : gfloat -> gfloat -> bool
+  val ( + ) : t -> t -> t
+  val ( - ) : t -> t -> t
+  val ( * ) : t -> t -> t
+  val ( / ) : t -> t -> t
+  val ( = ) : t -> t -> bool
 end

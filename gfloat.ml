@@ -1,25 +1,4 @@
 open Core_kernel
-open Bap.Std
-
-type sign = Pos | Neg [@@deriving sexp]
-
-type finite = {
-  expn : word;
-  frac : word;
-} [@@deriving sexp]
-
-type value =
-  | Inf
-  | Nan of bool * word
-  | Fin of finite
-[@@deriving sexp]
-
-type gfloat = {
-  sign : sign;
-  base : int;
-  prec : int;
-  data : value;
-}
 
 type rounding =
   | Nearest_even  (** round to nearest, ties to even *)
@@ -33,42 +12,118 @@ type loss =
   | ExactlyHalf
   | LessThanHalf
   | MoreThanHalf
-[@@deriving sexp]
 
 (** digit position from in range [0 .. base - 1] relative to [base/2] *)
 type digit = Middle | Less | More | Zero
 
-let enum_bits w =
-  let bits = Word.enum_bits w BigEndian in
-  let b_len = Seq.length bits in
-  let w_len = Word.bitwidth w in
-  if b_len > w_len then
-    Seq.drop bits (b_len - w_len)
-  else bits
+type sign = Pos | Neg [@@deriving sexp]
 
-let msb w =
-  Seq.findi (enum_bits w) ~f:(fun i x -> x) |> function
-  | None -> None
-  | Some (i,_) -> Some (Word.bitwidth w - i - 1)
+module Word = struct
+  type t = int * Z.t
+
+  let of_int ~width x = width, Z.of_int x
+  let to_int (_,t) = Z.to_int t
+  let of_z ~width z = width, z
+  let bitwidth (w,_) = w
+
+  let z (_,z) = z
+  let b0 = of_int ~width:1 0
+  let b1 = of_int ~width:1 1
+  let of_bool x = if x then b1 else b0
+  let succ (len,t) = len, Z.succ t
+  let pred (len,t) = len, Z.pred t
+
+  let extract ?hi ?(lo = 0) (w,z) =
+    let hi = Option.value ~default:(w-1) hi in
+    let len = hi - lo + 1 in
+    len, Z.extract z lo len
+
+  let one width = of_int ~width 1
+  let zero width = of_int ~width 0
+  let ones width = of_int ~width (-1)
+  let is_zero w = w = zero (bitwidth w)
+  let is_one w = w = one(bitwidth w)
+  let is_positive (_,x) = Z.sign x = 1
+  let is_negative (_,x) = Z.sign x = -1
+
+  let testbit (_,w) i = Z.testbit w i
+
+  let zero_extend (w,x) w' = w + w', x
+  let infer_length lenx leny = max lenx leny
+
+  let binop op (lenx,x) (leny,y) =
+    let len = infer_length lenx leny in
+    let res' = op x y in
+    let sign = Z.sign res' in
+    let res'' = Z.extract (Z.abs res') 0 len in
+    let res = if sign = -1 then Z.neg res'' else res'' in
+    len, res
+
+  let ( + ) x y = binop Z.( + ) x y
+  let ( - ) x y = binop Z.( - ) x y
+  let ( * ) x y = binop Z.( * ) x y
+  let ( / ) x y = binop Z.( / ) x y
+  let ( = ) (lenx,x) (leny,y) = Z.equal x y
+  let ( < ) (lenx,x) (leny,y) = Z.lt x y
+  let ( > ) (lenx,x) (leny,y) = Z.gt x y
+  let ( <= ) (lenx,x) (leny,y) = Z.leq x y
+  let ( >= ) (lenx,x) (leny,y) = Z.geq x y
+
+  let (lsl) (lenx,x) sh = lenx, Z.(x lsl sh)
+  let (lxor) (lenx,x) (leny,y)  = infer_length lenx leny, Z.(x lxor y)
+
+  let abs (len,w) = len, Z.abs w
+  let max x y = if x < y then y else x
+
+end
+
+type word = Word.t
+
+type meta = {
+  radix : int;
+  ebits : int;
+  fbits : int;
+}
+
+type finite = {
+  expn : word;
+  frac : word;
+}
+
+type data =
+  | Inf
+  | Nan of bool * word
+  | Fin of finite
+
+type t = {
+  sign : sign;
+  meta : meta;
+  data : data;
+}
+
+let meta ~radix ~expn_bits fbits = {radix; fbits; ebits=expn_bits}
 
 let bits_in = Word.bitwidth
 
-let string_of_loss x = Sexp.to_string (sexp_of_loss x)
+let msb w =
+  let len = bits_in w in
+  let bits = List.init len ~f:(fun i -> len - i - 1) in
+  List.find bits ~f:(fun i -> Word.testbit w i)
 
 (* returns a list of digits in [loss], most significant first *)
 let lost_digits base loss n =
   let to_digit x : digit =
-    let x = Word.to_int_exn x in
+    let x = Word.to_int x in
     let middle = base / 2 in
     if Int.(x = middle) then Middle
     else if Int.(x = 0) then Zero
     else if Int.( x < middle ) then Less
     else More in
-  let base = Word.of_int base ~width:(Word.bitwidth loss) in
+  let base = Word.of_int ~width:(bits_in loss) base in
   let rec loop acc loss =
     let loss' = Word.(loss / base) in
     let restored = Word.(loss' * base) in
-    let rem = Word.(loss - restored) in
+    let rem : word = Word.(loss - restored) in
     let acc = (to_digit rem)::acc in
     if Word.is_zero loss' then acc
     else loop acc loss' in
@@ -92,6 +147,7 @@ let estimate_loss base lost_frac n =
   | More :: _ -> MoreThanHalf
   | Less :: _ -> LessThanHalf
 
+(* TODO: add expn here and if all ones - adust it  *)
 let round rm sign frac loss =
   let is_need = match rm, loss with
     | Positive_inf,_ -> sign = Pos
@@ -99,7 +155,7 @@ let round rm sign frac loss =
     | Nearest_away, (ExactlyHalf | MoreThanHalf)
     | Nearest_even, MoreThanHalf -> true
     | Nearest_even, ExactlyHalf ->
-      Word.is_one (Word.extract_exn ~hi:0 ~lo:0 frac)
+      Word.is_one (Word.extract ~hi:0 ~lo:0 frac)
     | _ -> false in
   if is_need then
     let all_ones = Word.ones (bits_in frac) in
@@ -142,14 +198,14 @@ let rshift_frac base frac n =
 (* those functions are unsafe in that sence that there are not
    any checks for exponent overflow *)
 let unsafe_lshift base x n =
-  let n' = Word.to_int_exn n in
-  let expn = Word.(signed (x.expn - n)) in
+  let n' = Word.to_int n in
+  let expn = Word.(x.expn - n) in
   { expn; frac = lshift_frac base x.frac n' }
 
 let unsafe_rshift base x n =
-  let n' = Word.to_int_exn n in
+  let n' = Word.to_int n in
   let frac, loss = rshift_frac base x.frac n' in
-  let expn = Word.signed Word.(x.expn + n) in
+  let expn = Word.(x.expn + n) in
   { expn; frac }, loss
 
 (* [align_right base precision expn frac] shifts fraction right to fit
@@ -168,7 +224,7 @@ let align_right ~base ~precision expn frac =
   if Word.(expn' < expn) then None
   else
     let res, loss = rshift_frac base frac n in
-    Some (Word.signed expn', res, loss)
+    Some (expn', res, loss)
 
 let align_right_exn ~base ~precision epxn frac =
   match align_right ~base ~precision epxn frac with
@@ -187,7 +243,7 @@ let safe_align_right base expn frac =
   let max_expn =
     Word.of_int ~width:(bits_in expn) (max_exponent (bits_in expn)) in
   let rec run expn x =
-    let expn' = Word.abs (Word.signed expn) in
+    let expn' = Word.abs expn in
     if Word.(expn' = max_expn) then
       expn, x
     else
@@ -195,29 +251,26 @@ let safe_align_right base expn frac =
       | y, ExactlyZero -> run (Word.succ expn) y
       | _ -> expn, x in
   if Word.is_zero frac then expn,frac
-  else
-    let e,f = run expn frac in
-    Word.signed e, f
+  else run expn frac
 
 let safe_align_left base expn frac =
   let min_expn =
     Word.of_int ~width:(bits_in expn) (min_exponent (bits_in expn)) in
-  let min_expn = Word.signed min_expn in
   let width = bits_in frac in
   let rec run expn x =
     if Word.(expn = min_expn) then
       expn, x
     else
       let y = lshift_frac base x 1 in
-      let z = Word.extract_exn ~lo:width y in
+      let z = Word.extract ~lo:width y in
       if Word.is_zero z then run (Word.pred expn) y
       else expn,x in
   if Word.is_zero frac then expn, frac
   else
-    let frac = Word.concat (Word.zero width) frac in
+    let frac = Word.zero_extend frac width in
     let e,frac = run expn frac in
-    let frac = Word.extract_exn ~hi:(width - 1) frac in
-    Word.signed e,frac
+    let frac = Word.extract ~hi:(width - 1) frac in
+    e,frac
 
 (* min exponent without bit loss or exponent overflow,
    fraction shifted as left as possible, i.e. it occupies
@@ -235,52 +288,102 @@ let maximize_exponent base x =
 
 let norm = minimize_exponent
 
-let zero ~radix ~expn_bits prec =
-  let min = min_exponent expn_bits in
-  let expn = Word.of_int ~width:expn_bits min in
-  let frac = Word.zero prec in
-  let data = {expn; frac} in
-  {sign = Pos; base=radix; data = Fin data; prec }
+let prec x = x.meta.fbits
+let radix x = x.meta.radix
 
-let create ~radix ?(negative=false) expn frac =
+let zero meta =
+  let min = min_exponent meta.ebits in
+  let expn = Word.of_int ~width:meta.ebits min in
+  let frac = Word.zero meta.fbits in
+  let data = {expn; frac} in
+  {sign = Pos; meta; data = Fin data;}
+
+
+let sb' w =
+  let open Bap.Std in
+  let enum_bits w =
+    let bits = Word.enum_bits w BigEndian in
+    let b_len = Seq.length bits in
+    let w_len = Word.bitwidth w in
+    if b_len > w_len then
+      Seq.drop bits (b_len - w_len)
+     else bits in
+  let x = enum_bits w in
+  Seq.fold x ~init:"" ~f:(fun s b ->
+      let c = if b then "1" else "0" in
+      s ^ c)
+let sb ?w x =
+  let hi = match w with
+    | None -> 63
+    | Some x -> x - 1 in
+  sb' (Bap.Std.(Word.of_int64 x |> Word.extract_exn ~hi) )
+
+let sbz (w,z) = sb ~w (Z.to_int64 z)
+
+
+
+let create meta ?(negative=false) ~expn frac =
+  let expn = Word.of_z ~width:meta.ebits expn in
+  let frac = Word.of_z ~width:meta.fbits frac in
   if Word.is_zero frac then
-    let x = zero ~radix ~expn_bits:(bits_in expn) (bits_in frac) in
+    let x = zero meta in
     if negative then {x with sign = Neg} else x
   else
     let sign = if negative then Neg else Pos in
-    let expn = Word.signed expn in
-    let data = norm radix {expn; frac} in
-    let prec = Word.bitwidth frac in
-    {sign; base=radix; data = Fin data; prec }
+    let data = norm meta.radix {expn; frac} in
 
-let inf ~radix ?(negative=false) prec =
+    (* let () = *)
+    (*   let expn = Word.z data.expn |> Z.to_int64 in *)
+    (*   let frac = Word.z data.frac |> Z.to_int64 in *)
+    (*   let open Bap.Std in *)
+    (*   let expn = Word.of_int64 expn |> Word.extract_exn ~hi:10 in *)
+    (*   let frac = Word.of_int64 frac |> Word.extract_exn ~hi:52 in *)
+    (*   let enum_bits w = *)
+    (*     let bits = Word.enum_bits w BigEndian in *)
+    (*     let b_len = Seq.length bits in *)
+    (*     let w_len = Word.bitwidth w in *)
+    (*     if b_len > w_len then *)
+    (*       Seq.drop bits (b_len - w_len) *)
+    (*     else bits in *)
+    (*   let sb w = *)
+    (*     let bits = enum_bits w in *)
+    (*     let (@@) = sprintf "%s%d" in *)
+    (*     Seq.fold bits ~init:"" ~f:(fun s x -> *)
+    (*         if x then s @@ 1 *)
+    (*         else s @@ 0) in *)
+    (*   printf "i: %s_%s\n" (sb expn) (sb frac) in *)
+
+    {sign; meta; data = Fin data; }
+
+let inf ?(negative=false) meta =
   let sign = if negative then Neg else Pos in
-  {sign; base=radix; prec; data = Inf }
+  {sign; meta; data = Inf }
 
 (* mk nan with payload 0100..01 *)
-let nan ?(signaling=false) ?(negative=false) ?payload ~radix prec =
+let nan ?(signaling=false) ?(negative=false) ?payload meta =
   let sign = if negative then Neg else Pos in
+  let prec = meta.fbits in
   let payload = match payload with
-    | Some p -> p
+    | Some p -> Word.of_z ~width:prec p
     | None ->
-      let payload = Word.one prec in
-      let shift = Word.of_int ~width:prec (prec - 2) in
+      let payload = Word.one prec  in
+      let shift = prec - 2 in
       let payload = Word.(payload lsl shift) in
       Word.(payload + b1) in
   let data = Nan (signaling, payload) in
-  {sign; base=radix; prec; data}
+  {sign; meta; data}
 
 let fin t = match t.data with
-  | Fin {expn; frac} -> Some (expn,frac)
+  | Fin {expn; frac} -> Some (Word.z expn, Word.z frac)
   | _ -> None
 
 let frac t = match t.data with
-  | Fin {frac} -> Some frac
-  | Nan (_,frac) -> Some frac
+  | Fin {frac} -> Some (Word.z frac)
+  | Nan (_,frac) -> Some (Word.z frac)
   | _ -> None
 
 let expn t = match t.data with
-  | Fin {expn} -> Some expn
+  | Fin {expn} -> Some (Word.z expn)
   | _ -> None
 
 let is_zero x = match x.data with
@@ -316,7 +419,7 @@ let is_neg x = match x.sign with
   | Pos -> false
 
 let check_operands a b =
-  if Int.(a.base <> b.base) || Int.(a.prec <> b.prec) then
+  if Int.(radix a <> radix b) || Int.(prec a <> prec b) then
     failwith "attempting to operate with a differrent radix/precision"
 
 let equal a b =
@@ -325,13 +428,13 @@ let equal a b =
   else
     match a.data, b.data with
     | Fin x, Fin y ->
-      let x = norm a.base x in
-      let y = norm a.base y in
-      Word.equal x.expn y.expn &&
-      Word.equal x.frac y.frac
+      let x = norm (radix a) x in
+      let y = norm (radix a) y in
+      Word.(x.expn = y.expn) &&
+      Word.(x.frac = y.frac)
     | Inf, Inf -> a.sign = b.sign
     | Nan (s,payload), Nan (s', payload') ->
-      Word.equal payload payload' && Bool.equal s s'
+      Word.(payload = payload') && Bool.equal s s'
     | _ -> false
 
 let revert_sign = function
@@ -380,42 +483,69 @@ let combine_loss more less =
   | _ -> more
 
 let neg x = {x with sign = revert_sign x.sign}
-let extend x addend = { x with frac = Word.(concat (zero addend) x.frac) }
-let extract prec frac = Word.extract_exn ~hi:(prec - 1) frac
+let extend x addend = { x with frac = Word.zero_extend x.frac addend }
+let extract prec frac = Word.extract ~hi:(prec - 1) frac
 
 let add rm a b =
   let common_ground base x y =
-    let x,y = balance base x y in
-    let expn = Word.max x.expn y.expn in
-    if Word.(x.expn > y.expn) then
-      let y, loss = unsafe_rshift base y Word.(expn - y.expn) in
-      x, y, loss
-    else if Word.(x.expn < y.expn) then
-      let x,loss = unsafe_rshift base x Word.(expn - x.expn) in
-      x,y,loss
-    else x,y, ExactlyZero in
+    if Word.(x.expn = y.expn) then x,y,ExactlyZero
+    else
+      let x,y = balance base x y in
+      let expn = Word.max x.expn y.expn in
+      if Word.(x.expn > y.expn) then
+        let y, loss = unsafe_rshift base y Word.(expn - y.expn) in
+        x, y, loss
+      else
+        let x,loss = unsafe_rshift base x Word.(expn - x.expn) in
+        x,y,loss in
   check_operands a b;
   match a.data, b.data with
   | Fin x, Fin y ->
-    let x = maximize_exponent a.base x in
-    let y = maximize_exponent a.base y in
-    let x,y,loss = common_ground a.base x y in
+    (* printf "input x: expn %d; frac: %s\n" *)
+    (*   (Word.z x.expn |> Z.to_int) *)
+    (*   (Word.z x.frac |> Z.to_int64 |> sb ~w:53); *)
+    (* printf "input y: expn %d; frac: %s\n" *)
+    (*   (Word.z y.expn |> Z.to_int) *)
+    (*   (Word.z y.frac |> Z.to_int64 |> sb ~w:53); *)
+
+    let x = maximize_exponent (radix a) x in
+    let y = maximize_exponent (radix a) y in
+
+    (* printf "max x: expn %d; frac: %s\n" *)
+    (*   (Word.z x.expn |> Z.to_int) *)
+    (*   (Word.z x.frac |> Z.to_int64 |> sb ~w:53); *)
+    (* printf "max y: expn %d; frac: %s\n" *)
+    (*   (Word.z y.expn |> Z.to_int) *)
+    (*   (Word.z y.frac |> Z.to_int64 |> sb ~w:53); *)
+
+    let x,y,loss = common_ground (radix a) x y in
+
+    (* printf "common x: expn %d; frac: %s\n" *)
+    (*   (Word.z x.expn |> Z.to_int) *)
+    (*   (Word.z x.frac |> Z.to_int64 |> sb ~w:53); *)
+    (* printf "common y: expn %d; frac: %s\n" *)
+    (*   (Word.z y.expn |> Z.to_int) *)
+    (*   (Word.z y.frac |> Z.to_int64 |> sb ~w:53); *)
+
     let frac = Word.(x.frac + y.frac) in
+
+    (* let () = printf "res: %s\n" (sbz frac) in *)
+
     let data =
       if Word.(frac >= x.frac) then
-        Fin (norm a.base {expn=x.expn; frac=round rm Pos frac loss})
+        Fin (norm (radix a) {expn=x.expn; frac=round rm Pos frac loss})
       else
-        let x = extend x a.prec in
-        let y = extend y a.prec in
+        let x = extend x (prec a) in
+        let y = extend y (prec a) in
         let frac = Word.(x.frac + y.frac) in
-        match align_right a.base a.prec x.expn frac with
+        match align_right (radix a) (prec a) x.expn frac with
         | None -> Inf
         | Some (expn, frac, loss') ->
-          let loss = if Word.equal x.expn expn then loss
+          let loss = if Word.(x.expn = expn) then loss
             else combine_loss loss' loss in
-          let frac = extract a.prec frac in
+          let frac = extract (prec a) frac in
           let frac = round rm Pos frac loss in
-          Fin (norm a.base {expn; frac}) in
+          Fin (norm (radix a) {expn; frac}) in
     { a with data }
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
@@ -427,43 +557,43 @@ let add rm a b =
 
 let sub rm a b =
   let common_ground base x y =
-    let expn = Word.max x.expn y.expn in
-    if Word.(x.expn > y.expn) then
-      let x = unsafe_lshift base x Word.b1 in
-      let y, loss = unsafe_rshift base y Word.(expn - y.expn - b1) in
-      x, y, loss, false
-    else if Word.(x.expn < y.expn) then
-      let x,loss = unsafe_rshift base x Word.(expn - x.expn - b1) in
-      let y = unsafe_lshift base y Word.b1 in
-      x,y,loss, true
+    if Word.(x.expn = y.expn) then x,y,ExactlyZero, Word.(x.frac < y.frac)
     else
-      x,y, ExactlyZero, Word.(x.frac < y.frac) in
+      let expn = Word.max x.expn y.expn in
+      if Word.(x.expn > y.expn) then
+        let x = unsafe_lshift base x Word.b1 in
+        let y, loss = unsafe_rshift base y Word.(expn - y.expn - b1) in
+        x, y, loss, false
+      else
+        let x,loss = unsafe_rshift base x Word.(expn - x.expn - b1) in
+        let y = unsafe_lshift base y Word.b1 in
+        x,y,loss, true in
   check_operands a b;
   match a.data, b.data with
   | Fin x, Fin y ->
-    let x = minimize_exponent a.base x in
-    let y = minimize_exponent a.base y in
-    let x = extend x a.prec in
-    let y = extend y a.prec in
-    let x,y,loss,reverse = common_ground a.base x y in
+    let x = minimize_exponent (radix a) x in
+    let y = minimize_exponent (radix a) y in
+    let x = extend x (prec a) in
+    let y = extend y (prec a) in
+    let x,y,loss,reverse = common_ground (radix a) x y in
     let loss = invert_loss loss in
     let borrow = if loss = ExactlyZero then Word.b0 else Word.b1 in
     let frac = if reverse then Word.(y.frac - x.frac - borrow)
       else Word.(x.frac - y.frac - borrow) in
     let sign = if reverse then revert_sign a.sign else a.sign in
     let expn,frac,loss' =
-      align_right_exn ~base:a.base ~precision:a.prec x.expn frac in
-    let loss = if Word.equal x.expn expn then loss
+      align_right_exn ~base:(radix a) ~precision:(prec a) x.expn frac in
+    let loss = if Word.(x.expn = expn) then loss
       else combine_loss loss' loss in
-    let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
+    let frac = Word.extract ~hi:((prec a) - 1) frac in
     let frac = round rm sign frac loss in
-    let data = Fin (norm a.base {expn; frac}) in
+    let data = Fin (norm (radix a) {expn; frac}) in
     let a = {a with data; sign} in
     if is_zero a then {a with sign = Pos} else a
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> nan ~negative:true ~radix:a.base a.prec
+  | Inf, Inf -> nan ~negative:true a.meta
   | Inf, _ -> a
   | _, Inf -> b
 
@@ -482,7 +612,7 @@ let sub ?(rm=Nearest_even) = add_or_sub rm true
 let expn_sum x y =
   let is_pos = Word.is_positive in
   let is_neg = Word.is_negative in
-  let e = Word.(signed (x + y)) in
+  let e = Word.(x + y) in
   if is_pos x && is_pos y && Word.(e < x) then `Overflow_expn
   else
   if is_neg x && is_neg y && Word.(e > x) then `Overflow_expn
@@ -496,28 +626,28 @@ let mul ?(rm=Nearest_even) a b =
   | Fin _, Fin _ when is_zero b ->
     {b with sign = xor_sign a.sign b.sign}
   | Fin x, Fin y ->
-    let x = minimize_exponent a.base x in
-    let y = minimize_exponent a.base y in
+    let x = minimize_exponent (radix a) x in
+    let y = minimize_exponent (radix a) y in
     let sign = xor_sign a.sign b.sign in
     let precision = Word.bitwidth x.frac in
     let data = match expn_sum x.expn y.expn with
       | `Overflow_expn -> Inf
       | `Nice expn ->
-        let x = extend x a.prec in
-        let y = extend y a.prec in
+        let x = extend x (prec a) in
+        let y = extend y (prec a) in
         let zfrac = Word.(x.frac * y.frac) in
-        match align_right a.base precision expn zfrac with
+        match align_right (radix a) precision expn zfrac with
         | None -> Inf
         | Some (expn, frac, loss) ->
-          let frac = Word.extract_exn ~hi:(precision - 1) frac in
+          let frac = Word.extract ~hi:(precision - 1) frac in
           let frac = round rm sign frac loss in
-          Fin (norm a.base { expn; frac}) in
+          Fin (norm (radix a) { expn; frac}) in
     { a with data; sign }
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf,  _ when is_zero b -> nan a.base a.prec
-  | _, Inf when is_zero a -> nan a.base a.prec
+  | Inf,  _ when is_zero b -> nan a.meta
+  | _, Inf when is_zero a -> nan a.meta
   | Inf, Inf when a.sign = b.sign -> { a with sign = Pos }
   | Inf, Inf when a.sign <> b.sign -> { a with sign = Neg }
   | Inf, _ -> a
@@ -560,12 +690,12 @@ let divide base digits start_dividend divisor =
 let digits_of_precision base exp_bits precision =
   let expn, frac =
     safe_align_left base (Word.zero exp_bits) (Word.one precision) in
-  Word.to_int_exn expn |> abs
+  Word.to_int expn |> abs
 
 let expn_dif x y =
   let is_pos = Word.is_positive in
   let is_neg = Word.is_negative in
-  let e = Word.(signed (x - y)) in
+  let e = Word.(x - y) in
   if is_neg x && is_pos y && Word.(e > x) then `Underflow_expn
   else
   if is_pos x && is_neg y && Word.(e < x) then `Underflow_expn
@@ -573,86 +703,85 @@ let expn_dif x y =
 
 let div ?(rm=Nearest_even) a b =
   let zero expn_bits =
-    { expn=Word.zero expn_bits; frac = Word.zero a.prec } in
+    { expn=Word.zero expn_bits; frac = Word.zero (prec a) } in
   let rec dif xfrac yfrac xexpn yexpn =
     match expn_dif xexpn yexpn with
     | `Underflow_expn -> None
     | `Nice expn when Word.(xfrac >= yfrac) -> Some (expn, xfrac)
     | `Nice expn ->
-      let xfrac = lshift_frac a.base xfrac 1 in
+      let xfrac = lshift_frac (radix a) xfrac 1 in
       let one = Word.one (bits_in expn) in
       dif xfrac yfrac expn one in
   check_operands a b;
   match a.data,b.data with
-  | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true ~radix:a.base a.prec
+  | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.meta
   | Fin x, Fin y when is_zero b -> {a with data = Inf}
   | Fin x, Fin y ->
-    let x = minimize_exponent a.base x in
-    let y = minimize_exponent a.base y in
+    let x = minimize_exponent (radix a) x in
+    let y = minimize_exponent (radix a) y in
     let sign = xor_sign a.sign b.sign in
-    let extend = Word.zero a.prec in
-    let xfrac = Word.concat extend x.frac in
-    let yfrac = Word.concat extend y.frac in
+    let xfrac = Word.zero_extend x.frac (prec a) in
+    let yfrac = Word.zero_extend y.frac (prec a) in
     let data = match dif xfrac yfrac x.expn y.expn with
       | None -> zero (bits_in x.expn)
       | Some (expn, xfrac) ->
-        let expn = Word.signed expn in
-        let digits = digits_of_precision a.base (bits_in expn) a.prec in
-        let frac,loss = divide a.base digits xfrac yfrac in
+        let digits = digits_of_precision (radix a) (bits_in expn) (prec a) in
+        let frac,loss = divide (radix a) digits xfrac yfrac in
         let frac = round rm sign frac loss in
-        let expn = Word.signed (Word.(expn - of_int ~width:(bits_in expn) digits)) in
+        let expn = Word.(expn - of_int ~width:(bits_in expn) digits) in
         let expn,frac,loss =
-          align_right_exn ~base:a.base ~precision:a.prec expn frac in
-        let frac = Word.extract_exn ~hi:(a.prec - 1) frac in
+          align_right_exn ~base:(radix a) ~precision:(prec a) expn frac in
+        let frac = Word.extract ~hi:((prec a) - 1) frac in
         let frac = round rm sign frac loss in
-        let expn = Word.signed expn in
-        norm a.base  {frac; expn} in
+        norm (radix a)  {frac; expn} in
     {a with data = Fin data; sign; }
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> nan ~radix:a.base ~negative:true a.prec
+  | Inf, Inf -> nan ~negative:true a.meta
   | Inf, _ -> a
   | _, Inf -> b
 
 let truncate ?(rm=Nearest_even) ~upto a = match a.data with
   | Fin {expn; frac} ->
     begin
-      match align_right ~base:a.base ~precision:upto expn frac with
+      match align_right ~base:(radix a) ~precision:upto expn frac with
       | None -> None
       | Some (expn,frac,loss) ->
         let frac = round rm a.sign frac loss in
-        let frac = Word.extract_exn ~hi:(upto - 1) frac in
+        let frac = Word.extract ~hi:(upto - 1) frac in
         let data = Fin { expn; frac} in
         Some { a with data }
     end
-  | _ -> Some a
+  | _ ->
+    Some a
 
 let truncate_exn ?(rm=Nearest_even) ~upto a =
   Option.value_exn (truncate ~rm ~upto a)
 
-let sqrt ?(rm=Nearest_even) a = match a.data with
-  | Fin x when is_neg a -> nan ~radix:a.base ~negative:true a.prec
+let sqrt ?(rm=Nearest_even) a =
+  match a.data with
+  | Fin x when is_neg a -> nan ~negative:true a.meta
   | Fin x when is_zero a -> a
   | Fin x ->
-    let x = minimize_exponent a.base x in
+    let x = minimize_exponent (radix a) x in
     let expn,frac = x.expn, x.frac in
-    let frac = Word.(concat (zero a.prec) x.frac) in
-    let s = create ~radix:a.base expn frac in
-    let two =
-      let expn = Word.zero (bits_in expn) in
-      create ~radix:a.base expn (Word.of_int ~width:(bits_in frac) 2) in
+    let frac = Word.zero_extend x.frac (prec a) in
+    let meta = {a.meta with fbits = 2 * (prec a) } in
+    let s = create meta ~expn:(Word.z expn) (Word.z frac) in
+    let two = create meta ~expn:(Z.of_int 0) (Z.of_int 2) in
     let init = div ~rm s two in
-    let max = a.prec in
+    let max = prec a in
     let rec run x0 n =
       if n < max then
         let a1 = div ~rm s x0 in
         let a2 = add ~rm x0 a1 in
         let x' = div ~rm a2 two in
-        run x' (n + 1)
+        if equal x0 x' then x0
+        else run x' (n + 1)
       else x0 in
-    truncate_exn (run init 0) ~upto:a.prec
-  | Inf when is_neg a -> nan ~radix:a.base ~negative:true a.prec
+    truncate_exn (run init 0) ~upto:(prec a)
+  | Inf when is_neg a -> nan ~negative:true a.meta
   | _ -> a
 
 let round ?(rm=Nearest_even) ~precision a =
@@ -660,7 +789,7 @@ let round ?(rm=Nearest_even) ~precision a =
   | Some x -> x
   | None ->
     let negative = a.sign = Neg in
-    inf ~negative ~radix:a.base precision
+    inf ~negative a.meta
 
 module Infix = struct
   let ( + ) = add ~rm:Nearest_even
@@ -670,8 +799,9 @@ module Infix = struct
   let ( = ) = equal
 end
 
-let extend a prec = match a.data with
+let extend a addend = match a.data with
   | Fin x ->
-    let data = Fin (extend x prec) in
-    { a with data; prec = a.prec + prec }
+    let data = Fin (extend x addend) in
+    let meta = {a.meta with fbits = prec a + addend} in
+    { a with data; meta }
   | _ -> a
