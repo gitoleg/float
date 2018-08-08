@@ -1,3 +1,4 @@
+
 type t
 
 type rounding =
@@ -6,27 +7,28 @@ type rounding =
   | Towards_zero  (** round toward zero              *)
   | Positive_inf  (** round toward positive infinity *)
   | Negative_inf  (** round toward negative infinity *)
+[@@deriving sexp]
 
-(** meta data *)
-type meta
+(** gfloat descriptor *)
+type desc
 
-(** [meta : ~radix ~expn_bits fraction_bits] *)
-val meta : radix:int -> expn_bits:int -> int -> meta
+(** [desc : ~radix ~expn_bits fraction_bits] *)
+val desc : radix:int -> expn_bits:int -> int -> desc
 
 (** [create ~radix expn frac] creates gfloat from radix, signed expn
     and fraction.  *)
-val create : meta -> ?negative:bool -> expn:Z.t -> Z.t -> t
+val create : desc -> expn:Z.t -> Z.t -> t
 
 (** [zero ~radix expn_bits prec] creates gfloat equaled to zero from
     radix, exponent bits and precision *)
-val zero : meta -> t
+val zero : desc -> t
 
 (** [inf ~radix prec] creates positive or negative infinity from radix
     and precision *)
-val inf : ?negative:bool -> meta -> t
+val inf : ?negative:bool -> desc -> t
 
 (** [nan ~radix prec] creates nan from radix and precision. *)
-val nan : ?signaling:bool -> ?negative:bool -> ?payload:Z.t -> meta -> t
+val nan : ?signaling:bool -> ?negative:bool -> ?payload:Z.t -> desc -> t
 
 (** [is_fin x] returns true if [x] is finite number, i.e. neither nan
     nor inf *)

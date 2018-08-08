@@ -21,23 +21,24 @@ let ninf_bits = Int64.bits_of_float Caml.neg_infinity
 let nan_bits = Int64.bits_of_float Caml.nan
 
 let double_of_float x =
-  let meta = meta ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
+  let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
   let bits = Int64.bits_of_float x in
-  if Int64.(bits = inf_bits) then inf meta
-  else if Int64.(bits = ninf_bits) then inf meta ~negative:true
-  else if Int64.(bits = nan_bits) then nan meta
+  if Int64.(bits = inf_bits) then inf desc
+  else if Int64.(bits = ninf_bits) then inf desc ~negative:true
+  else if Int64.(bits = nan_bits) then nan desc
   else
     let bits = Z.of_int64 bits in
     let negative = Z.testbit bits 63 in
     let expn = Z.to_int (Z.extract bits 52 11) in
     let frac = Z.extract bits 0 52 in
     let expn' = expn - double_bias in
-    if Int.(expn = 0) && Z.(frac = zero) then zero meta
+    if Int.(expn = 0) && Z.(frac = zero) then zero desc
     else
       let dexp = 52 in
       let expn = Z.of_int (expn' - dexp) in
       let frac = Z.((Z.one lsl 52) lor frac) in
-      create meta ~negative ~expn frac
+      let frac = if negative then Z.neg frac else frac in
+      create desc ~expn frac
 
 let normalize_ieee biased_expn frac =
   let bias = double_bias in
@@ -100,6 +101,15 @@ let float_of_double t =
   if is_neg t then Caml.neg_infinity
   else Caml.infinity
 
+let bits64 f =
+  let bits = Z.of_int64 (Int64.bits_of_float f) in
+  let bits = List.init 64 ~f:(fun i ->
+      if Z.testbit bits i then '1' else '0') |>
+             List.rev in
+  List.foldi ~init:"" bits ~f:(fun i s c ->
+      if i = 0 || i = 11 then sprintf "%s%c_" s c
+      else sprintf "%s%c" s c)
+
 let truncate_zeros x =
   match String.index x '.' with
   | None -> x
@@ -107,7 +117,7 @@ let truncate_zeros x =
 
 let decimal_precision = 50
 let decimal_expn_bits = 10
-let decimal_meta = meta ~radix:10 ~expn_bits:decimal_expn_bits decimal_precision
+let decimal_desc = desc ~radix:10 ~expn_bits:decimal_expn_bits decimal_precision
 
 let log2 x = Float.log10 x /. Float.log10 2.0
 let pow2 x = int_of_float (2.0 ** float_of_int x)
@@ -194,17 +204,19 @@ let truncate str =
     is_neg, Z.to_string frac, expn
 
 let decimal_of_string = function
-  | "nan" -> nan decimal_meta
-  | "inf" -> inf decimal_meta
-  | "-inf" -> inf ~negative:true decimal_meta
+  | "nan" -> nan decimal_desc
+  | "inf" -> inf decimal_desc
+  | "-inf" -> inf ~negative:true decimal_desc
   | str ->
     let negative, frac, expn = truncate str in
     if is_zero_float frac then
-      create decimal_meta ~negative ~expn:Z.zero Z.zero
+      let frac = if negative then Z.neg Z.zero else Z.zero in
+      create decimal_desc ~expn:Z.zero frac
     else
       let frac = Z.of_string frac in
+      let frac = if negative then Z.neg frac else frac in
       let expn = Z.of_int expn in
-      create decimal_meta ~negative ~expn frac
+      create decimal_desc ~expn frac
 
 let truncate_float f =
   let is_neg, x,e = truncate (str_of_float f) in
@@ -438,6 +450,8 @@ let ( /$ ) = div_special
 
 let neg x = ~-.x
 
+let () = Random.self_init ()
+
 let random2 ~times ctxt =
   let binop op (x, (init_x, init_px)) (y, (init_y, init_py)) ctxt =
     if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
@@ -456,7 +470,6 @@ let random2 ~times ctxt =
       if not (is_ok_unop2 op x) then
         let error = sprintf "%s failed for radix 2" op_str in
         assert_bool error false in
-  let () = Random.self_init () in
   let random max = Random.int max in
   let random_elt xs = List.nth_exn xs @@ random (List.length xs) in
   let sign x = (random_elt [ident; (fun x -> ~-. x)]) x in
@@ -469,8 +482,8 @@ let random2 ~times ctxt =
       else
         let p = 10.0 ** float_of_int p in
         float_of_int a /. p in
-    let meta = a,p in
-    sign x, meta in
+    let desc = a,p in
+    sign x, desc in
   let rec run n =
     if n < times then
       let op = random_elt [`Add;`Sub;`Mul; `Div] in

@@ -6,6 +6,7 @@ type rounding =
   | Towards_zero  (** round toward zero              *)
   | Positive_inf  (** round toward positive infinity *)
   | Negative_inf  (** round toward negative infinity *)
+[@@deriving sexp]
 
 type loss =
   | ExactlyZero
@@ -79,7 +80,7 @@ end
 
 type word = Word.t
 
-type meta = {
+type desc = {
   radix : int;
   ebits : int;
   fbits : int;
@@ -97,11 +98,11 @@ type data =
 
 type t = {
   sign : sign;
-  meta : meta;
+  desc : desc;
   data : data;
 }
 
-let meta ~radix ~expn_bits fbits = {radix; fbits; ebits=expn_bits}
+let desc ~radix ~expn_bits fbits = {radix; fbits; ebits=expn_bits}
 
 let bits_in = Word.bitwidth
 
@@ -288,35 +289,36 @@ let maximize_exponent base x =
 
 let norm = minimize_exponent
 
-let prec x = x.meta.fbits
-let radix x = x.meta.radix
+let prec x = x.desc.fbits
+let radix x = x.desc.radix
 
-let zero meta =
-  let min = min_exponent meta.ebits in
-  let expn = Word.of_int ~width:meta.ebits min in
-  let frac = Word.zero meta.fbits in
+let zero desc =
+  let min = min_exponent desc.ebits in
+  let expn = Word.of_int ~width:desc.ebits min in
+  let frac = Word.zero desc.fbits in
   let data = {expn; frac} in
-  {sign = Pos; meta; data = Fin data;}
+  {sign = Pos; desc; data = Fin data;}
 
-let create meta ?(negative=false) ~expn frac =
-  let expn = Word.of_z ~width:meta.ebits expn in
-  let frac = Word.of_z ~width:meta.fbits frac in
+let create desc ~expn frac =
+  let sign = if Z.(frac < zero) then Neg else Pos in
+  let frac = Z.abs frac in
+  let expn = Word.of_z ~width:desc.ebits expn in
+  let frac = Word.of_z ~width:desc.fbits frac in
   if Word.is_zero frac then
-    let x = zero meta in
-    if negative then {x with sign = Neg} else x
+    let x = zero desc in
+    {x with sign}
   else
-    let sign = if negative then Neg else Pos in
-    let data = Fin (norm meta.radix {expn; frac}) in
-    {sign; meta; data; }
+    let data = Fin (norm desc.radix {expn; frac}) in
+    {sign; desc; data; }
 
-let inf ?(negative=false) meta =
+let inf ?(negative=false) desc =
   let sign = if negative then Neg else Pos in
-  {sign; meta; data = Inf }
+  {sign; desc; data = Inf }
 
 (* mk nan with payload 0100..01 *)
-let nan ?(signaling=false) ?(negative=false) ?payload meta =
+let nan ?(signaling=false) ?(negative=false) ?payload desc =
   let sign = if negative then Neg else Pos in
-  let prec = meta.fbits in
+  let prec = desc.fbits in
   let payload = match payload with
     | Some p -> Word.of_z ~width:prec p
     | None ->
@@ -325,7 +327,7 @@ let nan ?(signaling=false) ?(negative=false) ?payload meta =
       let payload = Word.(payload lsl shift) in
       Word.(payload + b1) in
   let data = Nan (signaling, payload) in
-  {sign; meta; data}
+  {sign; desc; data}
 
 let fin t = match t.data with
   | Fin {expn; frac} -> Some (Word.z expn, Word.z frac)
@@ -521,7 +523,7 @@ let sub rm a b =
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> nan ~negative:true a.meta
+  | Inf, Inf -> nan ~negative:true a.desc
   | Inf, _ -> a
   | _, Inf -> b
 
@@ -574,8 +576,8 @@ let mul ?(rm=Nearest_even) a b =
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf,  _ when is_zero b -> nan a.meta
-  | _, Inf when is_zero a -> nan a.meta
+  | Inf,  _ when is_zero b -> nan a.desc
+  | _, Inf when is_zero a -> nan a.desc
   | Inf, Inf when a.sign = b.sign -> { a with sign = Pos }
   | Inf, Inf when a.sign <> b.sign -> { a with sign = Neg }
   | Inf, _ -> a
@@ -642,7 +644,7 @@ let div ?(rm=Nearest_even) a b =
       dif xfrac yfrac expn one in
   check_operands a b;
   match a.data,b.data with
-  | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.meta
+  | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
   | Fin x, Fin y when is_zero b -> {a with data = Inf}
   | Fin x, Fin y ->
     let x = minimize_exponent (radix a) x in
@@ -666,7 +668,7 @@ let div ?(rm=Nearest_even) a b =
   | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
   | Nan _, _ -> a
   | _, Nan _ -> b
-  | Inf, Inf -> nan ~negative:true a.meta
+  | Inf, Inf -> nan ~negative:true a.desc
   | Inf, _ -> a
   | _, Inf -> b
 
@@ -689,15 +691,15 @@ let truncate_exn ?(rm=Nearest_even) ~upto a =
 
 let sqrt ?(rm=Nearest_even) a =
   match a.data with
-  | Fin x when is_neg a -> nan ~negative:true a.meta
+  | Fin x when is_neg a -> nan ~negative:true a.desc
   | Fin x when is_zero a -> a
   | Fin x ->
     let x = minimize_exponent (radix a) x in
     let expn,frac = x.expn, x.frac in
     let frac = Word.zero_extend x.frac (prec a) in
-    let meta = {a.meta with fbits = 2 * (prec a) } in
-    let s = create meta ~expn:(Word.z expn) (Word.z frac) in
-    let two = create meta ~expn:(Z.of_int 0) (Z.of_int 2) in
+    let desc = {a.desc with fbits = 2 * (prec a) } in
+    let s = create desc ~expn:(Word.z expn) (Word.z frac) in
+    let two = create desc ~expn:(Z.of_int 0) (Z.of_int 2) in
     let init = div ~rm s two in
     let max = prec a in
     let rec run x0 n =
@@ -709,7 +711,7 @@ let sqrt ?(rm=Nearest_even) a =
         else run x' (n + 1)
       else x0 in
     truncate_exn (run init 0) ~upto:(prec a)
-  | Inf when is_neg a -> nan ~negative:true a.meta
+  | Inf when is_neg a -> nan ~negative:true a.desc
   | _ -> a
 
 let round ?(rm=Nearest_even) ~precision a =
@@ -717,7 +719,7 @@ let round ?(rm=Nearest_even) ~precision a =
   | Some x -> x
   | None ->
     let negative = a.sign = Neg in
-    inf ~negative a.meta
+    inf ~negative a.desc
 
 module Infix = struct
   let ( + ) = add ~rm:Nearest_even
@@ -730,6 +732,6 @@ end
 let extend a addend = match a.data with
   | Fin x ->
     let data = Fin (extend x addend) in
-    let meta = {a.meta with fbits = prec a + addend} in
-    { a with data; meta }
+    let desc = {a.desc with fbits = prec a + addend} in
+    { a with data; desc }
   | _ -> a
