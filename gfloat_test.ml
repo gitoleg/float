@@ -452,7 +452,7 @@ let neg x = ~-.x
 
 let () = Random.self_init ()
 
-let random2 ~times ctxt =
+let make_random2 ~times =
   let binop op (x, (init_x, init_px)) (y, (init_y, init_py)) ctxt =
     if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
     else
@@ -484,15 +484,14 @@ let random2 ~times ctxt =
         float_of_int a /. p in
     let desc = a,p in
     sign x, desc in
-  let rec run n =
-    if n < times then
-      let op = random_elt [`Add;`Sub;`Mul; `Div] in
-      let x = float () in
-      let y = float () in
-      let () = binop op x y ctxt in
-      let () = sqrt x ctxt in
-      run Caml.(n + 1) in
-  run 0
+  List.init times ~f:(fun i ->
+      let f (ctxt : test_ctxt) =
+        let op = random_elt [`Add;`Sub;`Mul; `Div] in
+        let x = float () in
+        let y = float () in
+        let () = binop op x y ctxt in
+        sqrt x ctxt in
+      (sprintf "random%d" i) >:: f)
 
 let suite () =
 
@@ -628,8 +627,6 @@ let suite () =
     "sin 0.000000042"  >:: sin 0.000000042;
 
     (* random - +,-,*,/ with a random operands for radix=2 *)
-    "random " >:: random2 ~times:10000;
-
-  ]
+  ] @ make_random2 ~times:10000
 
 let () = run_test_tt_main (suite ())
