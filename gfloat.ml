@@ -31,9 +31,7 @@ module type Bignum = sig
   type t
   val of_int : width:int -> int -> t
   val to_int : t -> int
-  val of_z : width:int -> Z.t -> t
   val bitwidth : t -> int
-  val to_z : t -> Z.t
   val b0 : t
   val b1 : t
   val of_bool : bool -> t
@@ -280,10 +278,8 @@ module Make(Bignum : Bignum) = struct
     {sign = Pos; desc; data = Fin data;}
 
   let create desc ~expn frac =
-    let sign = if Z.(frac < zero) then Neg else Pos in
-    let frac = Z.abs frac in
-    let expn = Bignum.of_z ~width:desc.ebits expn in
-    let frac = Bignum.of_z ~width:desc.fbits frac in
+    let sign = if Bignum.(frac < zero desc.fbits) then Neg else Pos in
+    let frac = Bignum.abs frac in
     if Bignum.is_zero frac then
       let x = zero desc in
       {x with sign}
@@ -300,7 +296,7 @@ module Make(Bignum : Bignum) = struct
     let sign = if negative then Neg else Pos in
     let prec = desc.fbits in
     let payload = match payload with
-      | Some p -> Bignum.of_z ~width:prec p
+      | Some p -> p
       | None ->
         let payload = Bignum.one prec  in
         let shift = prec - 2 in
@@ -310,16 +306,16 @@ module Make(Bignum : Bignum) = struct
     {sign; desc; data}
 
   let fin t = match t.data with
-    | Fin {expn; frac} -> Some (Bignum.to_z expn, Bignum.to_z frac)
+    | Fin {expn; frac} -> Some (expn, frac)
     | _ -> None
 
   let frac t = match t.data with
-    | Fin {frac} -> Some (Bignum.to_z frac)
-    | Nan (_,frac) -> Some (Bignum.to_z frac)
+    | Fin {frac} -> Some frac
+    | Nan (_,frac) -> Some frac
     | _ -> None
 
   let expn t = match t.data with
-    | Fin {expn} -> Some (Bignum.to_z expn)
+    | Fin {expn} -> Some expn
     | _ -> None
 
   let is_zero x = match x.data with
@@ -678,8 +674,10 @@ module Make(Bignum : Bignum) = struct
       let expn,frac = x.expn, x.frac in
       let frac = Bignum.zero_extend x.frac (prec a) in
       let desc = {a.desc with fbits = 2 * (prec a) } in
-      let s = create desc ~expn:(Bignum.to_z expn) (Bignum.to_z frac) in
-      let two = create desc ~expn:(Z.of_int 0) (Z.of_int 2) in
+      let s = create desc ~expn frac in
+      let two = create desc
+          ~expn:(Bignum.of_int ~width:a.desc.ebits 0)
+          (Bignum.of_int ~width:a.desc.fbits 2) in
       let init = div ~rm s two in
       let max = prec a in
       let rec run x0 n =
