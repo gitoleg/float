@@ -452,6 +452,30 @@ let neg x = ~-.x
 
 let () = Random.self_init ()
 
+let make_int64 sign_bit expn frac =
+  let sign_bit = Int64.(of_int sign_bit lsl 63) in
+  let expn = Int64.(of_int expn lsl 52) in
+  let frac = Int64.of_int frac in
+  Int64.(sign_bit lor expn lor frac)
+
+let make_float sign expn frac =
+  let x = make_int64 sign expn frac in
+  Int64.float_of_bits x
+
+let random_int ~from ~to_ =
+  let open Caml in
+  let max = to_ - from in
+  let x = Random.int max in
+  x + from
+
+let expn () = random_int ~from:1020 ~to_:1040
+let frac () = Random.int 4503599627000000
+let sign () = Random.int 2
+let float () =
+  let expn = expn () in
+  let frac = frac () in
+  make_float (sign ()) expn frac, (expn,frac)
+
 let make_random2 ~times =
   let binop op (x, (init_x, init_px)) (y, (init_y, init_py)) ctxt =
     if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
@@ -470,20 +494,20 @@ let make_random2 ~times =
       if not (is_ok_unop2 op x) then
         let error = sprintf "%s failed for radix 2" op_str in
         assert_bool error false in
-  let random max = Random.int max in
+  let random = Random.int in
   let random_elt xs = List.nth_exn xs @@ random (List.length xs) in
-  let sign x = (random_elt [ident; (fun x -> ~-. x)]) x in
-  let int () = Random.int 1000000 in
-  let float () =
-    let a = int () in
-    let s = String.length (string_of_int a) in
-    let p = Random.int Caml.(2 * s) in
-    let x = if p = 0 then float_of_int a
-      else
-        let p = 10.0 ** float_of_int p in
-        float_of_int a /. p in
-    let desc = a,p in
-    sign x, desc in
+  (* let sign x = (random_elt [ident; (fun x -> ~-. x)]) x in *)
+  (* let int () = Random.int 1000000 in *)
+  (* let float () = *)
+  (*   let a = int () in *)
+  (*   let s = String.length (string_of_int a) in *)
+  (*   let p = Random.int Caml.(2 * s) in *)
+  (*   let x = if p = 0 then float_of_int a *)
+  (*     else *)
+  (*       let p = 10.0 ** float_of_int p in *)
+  (*       float_of_int a /. p in *)
+  (*   let desc = a,p in *)
+  (*   sign x, desc in *)
   List.init times ~f:(fun i ->
       let f (ctxt : test_ctxt) =
         let op = random_elt [`Add;`Sub;`Mul; `Div] in
