@@ -1,6 +1,7 @@
 open Core_kernel
 open OUnit2
 open Gfloat
+open Gfloat_z
 
 let msb w =
   let rec run n =
@@ -20,6 +21,10 @@ let inf_bits = Int64.bits_of_float Caml.infinity
 let ninf_bits = Int64.bits_of_float Caml.neg_infinity
 let nan_bits = Int64.bits_of_float Caml.nan
 
+let create_double ~expn frac =
+  let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
+  create desc ~expn:(double_ebits,expn) (double_fbits,frac)
+
 let double_of_float x =
   let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
   let bits = Int64.bits_of_float x in
@@ -38,7 +43,7 @@ let double_of_float x =
       let expn = Z.of_int (expn' - dexp) in
       let frac = Z.((Z.one lsl 52) lor frac) in
       let frac = if negative then Z.neg frac else frac in
-      create desc ~expn frac
+      create_double ~expn frac
 
 let normalize_ieee biased_expn frac =
   let bias = double_bias in
@@ -85,7 +90,7 @@ let int64_of_bits is_neg expn frac =
 let float_of_double t =
   if is_zero t then if is_neg t then ~-. 0.0 else 0.0
   else if is_fin t then
-    let expn, frac = Option.value_exn (fin t) in
+    let (_,expn), (_,frac) = Option.value_exn (fin t) in
     let expn = Z.to_int expn in
     let frac = Z.to_int64 frac in
     let expn = double_bias + expn in
@@ -203,6 +208,9 @@ let truncate str =
     let frac = Z.extract frac 0 decimal_precision in
     is_neg, Z.to_string frac, expn
 
+let create_decimal ~expn frac =
+  create decimal_desc (decimal_expn_bits,expn) (decimal_precision,frac)
+
 let decimal_of_string = function
   | "nan" -> nan decimal_desc
   | "inf" -> inf decimal_desc
@@ -211,12 +219,12 @@ let decimal_of_string = function
     let negative, frac, expn = truncate str in
     if is_zero_float frac then
       let frac = if negative then Z.neg Z.zero else Z.zero in
-      create decimal_desc ~expn:Z.zero frac
+      create_decimal ~expn:Z.zero frac
     else
       let frac = Z.of_string frac in
       let frac = if negative then Z.neg frac else frac in
       let expn = Z.of_int expn in
-      create decimal_desc ~expn frac
+      create_decimal ~expn frac
 
 let truncate_float f =
   let is_neg, x,e = truncate (str_of_float f) in
@@ -230,7 +238,7 @@ let attach_sign x t = if is_neg t then ~-. x else x
 let string_of_decimal t =
   let attach_sign x = if is_neg t then "-" ^ x else x in
   if is_fin t then
-    let expn, frac = Option.value_exn (fin t) in
+    let (_,expn),(_,frac) = Option.value_exn (fin t) in
     let expn = Z.to_int expn in
     let frac = Z.to_string frac in
     insert_point frac expn |> attach_sign
@@ -357,6 +365,7 @@ let is_ok_binop2 op x y =
   let op_real,op_ours = get_binop op in
   let real = op_real x y in
   let ours = base2_binop op_ours x y in
+  printf "%f %f\n" real ours;
   equal_base2 real ours
 
 let is_ok_binop10 op x y =
@@ -517,7 +526,16 @@ let make_random2 ~times =
         sqrt x ctxt in
       (sprintf "random%d" i) >:: f)
 
+
 let suite () =
+  "Gfloat test" >::: [
+
+    (* add *)
+    "0.0 + 0.5"     >:: 0.0 + 0.5;
+
+  ]
+
+let _suite () =
 
   "Gfloat test" >::: [
 

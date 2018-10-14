@@ -1,6 +1,4 @@
 
-type t
-
 type rounding =
   | Nearest_even  (** round to nearest, ties to even *)
   | Nearest_away  (** round to nearest, ties to away *)
