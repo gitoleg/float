@@ -21,12 +21,10 @@ let inf_bits = Int64.bits_of_float Caml.infinity
 let ninf_bits = Int64.bits_of_float Caml.neg_infinity
 let nan_bits = Int64.bits_of_float Caml.nan
 
-let create_double ~expn frac =
-  let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
-  create desc ~expn:(double_ebits,expn) (double_fbits,frac)
-
 let double_of_float x =
   let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
+  let create ~expn frac =
+    create desc ~expn:(double_ebits,expn) (double_fbits + 1,frac) in
   let bits = Int64.bits_of_float x in
   if Int64.(bits = inf_bits) then inf desc
   else if Int64.(bits = ninf_bits) then inf desc ~negative:true
@@ -41,9 +39,9 @@ let double_of_float x =
     else
       let dexp = 52 in
       let expn = Z.of_int (expn' - dexp) in
-      let frac = Z.((Z.one lsl 52) lor frac) in
+      let frac = Z.((one lsl 52) lor frac) in
       let frac = if negative then Z.neg frac else frac in
-      create_double ~expn frac
+      create ~expn frac
 
 let normalize_ieee biased_expn frac =
   let bias = double_bias in
@@ -365,7 +363,6 @@ let is_ok_binop2 op x y =
   let op_real,op_ours = get_binop op in
   let real = op_real x y in
   let ours = base2_binop op_ours x y in
-  printf "%f %f\n" real ours;
   equal_base2 real ours
 
 let is_ok_binop10 op x y =
@@ -528,14 +525,6 @@ let make_random2 ~times =
 
 
 let suite () =
-  "Gfloat test" >::: [
-
-    (* add *)
-    "0.0 + 0.5"     >:: 0.0 + 0.5;
-
-  ]
-
-let _suite () =
 
   "Gfloat test" >::: [
 

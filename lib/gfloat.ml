@@ -676,8 +676,8 @@ module Make(Bignum : Bignum) = struct
       let desc = {a.desc with fbits = 2 * (prec a) } in
       let s = create desc ~expn frac in
       let two = create desc
-          ~expn:(Bignum.of_int ~width:a.desc.ebits 0)
-          (Bignum.of_int ~width:a.desc.fbits 2) in
+          ~expn:(Bignum.of_int ~width:desc.ebits 0)
+          (Bignum.of_int ~width:desc.fbits 2) in
       let init = div ~rm s two in
       let max = prec a in
       let rec run x0 n =

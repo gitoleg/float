@@ -151,9 +151,9 @@ let compare_str x y =
 (*   let ( / ) = div *)
 (*   let ( sqrt ) = sqrt *)
 
-end
+(* end *)
 
-module Run = Run_manually(struct type t = () end)
+(* module Run = Run_manually(struct type t = () end) *)
 
 
 module Debug = struct
