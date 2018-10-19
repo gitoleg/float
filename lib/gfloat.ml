@@ -31,20 +31,17 @@ module type Bignum = sig
   type t
   val of_int : width:int -> int -> t
   val to_int : t -> int
-  val bitwidth : t -> int
-  val b0 : t
-  val b1 : t
-  val of_bool : bool -> t
   val succ : t -> t
   val pred : t -> t
-  val extract : ?hi:int -> ?lo:int -> t -> t
-  val one  : int -> t
-  val zero : int -> t
   val ones : int -> t
+  val bitwidth : t -> int
   val is_zero : t -> bool
   val is_one  : t -> bool
   val is_positive : t -> bool
   val is_negative : t -> bool
+  val abs : t -> t
+  val max : t -> t -> t
+  val extract : ?hi:int -> ?lo:int -> t -> t
   val testbit : t -> int -> bool
   val zero_extend : t -> int -> t
   val ( + ) : t -> t -> t
@@ -53,18 +50,37 @@ module type Bignum = sig
   val ( / ) : t -> t -> t
   val ( = ) : t -> t -> bool
   val ( < ) : t -> t -> bool
-  val ( > ) : t -> t -> bool
-  val ( <= ) : t -> t -> bool
-  val ( >= ) : t -> t -> bool
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
-  val abs : t -> t
-  val max : t -> t -> t
 end
 
 module Make(Bignum : Bignum) = struct
 
   type bignum = Bignum.t
+
+  module Bignum = struct
+    include Bignum
+
+    let b0 = of_int ~width:1 0
+    let b1 = of_int ~width:1 1
+
+    let of_sign = function
+      | Pos -> b0
+      | Neg -> b1
+
+    let of_bool = function
+      | true -> b1
+      | false -> b0
+
+    let one width = of_int ~width 1
+    let zero width = of_int ~width 0
+
+    let ( > ) x y = y < x
+    let ( <= ) x y = x < y || x = y
+    let ( >= ) x y = x > y || x = y
+
+  end
+
 
   type finite = {
     expn : bignum;
@@ -278,7 +294,7 @@ module Make(Bignum : Bignum) = struct
     {sign = Pos; desc; data = Fin data;}
 
   let create desc ~expn frac =
-    let sign = if Bignum.(frac < zero desc.fbits) then Neg else Pos in
+    let sign = if Bignum.(frac < Bignum.zero desc.fbits) then Neg else Pos in
     let frac = Bignum.abs frac in
     if Bignum.is_zero frac then
       let x = zero desc in
@@ -301,7 +317,7 @@ module Make(Bignum : Bignum) = struct
         let payload = Bignum.one prec  in
         let shift = prec - 2 in
         let payload = Bignum.(payload lsl shift) in
-        Bignum.(payload + b1) in
+        Bignum.(payload + Bignum.b1) in
     let data = Nan (signaling, payload) in
     {sign; desc; data}
 
@@ -373,12 +389,8 @@ module Make(Bignum : Bignum) = struct
     | Pos -> Neg
     | Neg -> Pos
 
-  let bignum_of_sign = function
-    | Pos -> Bignum.b0
-    | Neg -> Bignum.b1
-
   let xor_sign s s' =
-    let r = Bignum.(bignum_of_sign s lxor bignum_of_sign s') in
+    let r = Bignum.(Bignum.of_sign s lxor Bignum.of_sign s') in
     if Bignum.is_one r then Neg else Pos
 
   let invert_loss = function
@@ -468,10 +480,10 @@ module Make(Bignum : Bignum) = struct
         let expn = Bignum.max x.expn y.expn in
         if Bignum.(x.expn > y.expn) then
           let x = unsafe_lshift base x Bignum.b1 in
-          let y, loss = unsafe_rshift base y Bignum.(expn - y.expn - b1) in
+          let y, loss = unsafe_rshift base y Bignum.(expn - y.expn - Bignum.b1) in
           x, y, loss, false
         else
-          let x,loss = unsafe_rshift base x Bignum.(expn - x.expn - b1) in
+          let x,loss = unsafe_rshift base x Bignum.(expn - x.expn - Bignum.b1) in
           let y = unsafe_lshift base y Bignum.b1 in
           x,y,loss, true in
     check_operands a b;
@@ -506,8 +518,8 @@ module Make(Bignum : Bignum) = struct
   let add_or_sub rm subtract a b =
     check_operands a b;
     let s1 = Bignum.of_bool subtract in
-    let s2 = bignum_of_sign a.sign in
-    let s3 = bignum_of_sign b.sign in
+    let s2 = Bignum.of_sign a.sign in
+    let s3 = Bignum.of_sign b.sign in
     let is_subtract = Bignum.is_one Bignum.(s1 lxor (s2 lxor s3)) in
     if is_subtract then sub rm a b
     else add rm a b

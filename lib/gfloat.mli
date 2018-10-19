@@ -17,20 +17,17 @@ module type Bignum = sig
   type t
   val of_int : width:int -> int -> t
   val to_int : t -> int
-  val bitwidth : t -> int
-  val b0 : t
-  val b1 : t
-  val of_bool : bool -> t
   val succ : t -> t
   val pred : t -> t
-  val extract : ?hi:int -> ?lo:int -> t -> t
-  val one  : int -> t
-  val zero : int -> t
   val ones : int -> t
+  val bitwidth : t -> int
   val is_zero : t -> bool
   val is_one  : t -> bool
   val is_positive : t -> bool
   val is_negative : t -> bool
+  val abs : t -> t
+  val max : t -> t -> t
+  val extract : ?hi:int -> ?lo:int -> t -> t
   val testbit : t -> int -> bool
   val zero_extend : t -> int -> t
   val ( + ) : t -> t -> t
@@ -39,13 +36,8 @@ module type Bignum = sig
   val ( / ) : t -> t -> t
   val ( = ) : t -> t -> bool
   val ( < ) : t -> t -> bool
-  val ( > ) : t -> t -> bool
-  val ( <= ) : t -> t -> bool
-  val ( >= ) : t -> t -> bool
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
-  val abs : t -> t
-  val max : t -> t -> t
 end
 
 module Make(B : Bignum) : sig

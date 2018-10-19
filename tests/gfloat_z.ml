@@ -11,9 +11,6 @@ module Bignum_of_z : Bignum with type t = bignum = struct
   let of_z ~width z = width, z
   let to_z (_,z) = z
   let bitwidth (w,_) = w
-  let b0 = of_int ~width:1 0
-  let b1 = of_int ~width:1 1
-  let of_bool x = if x then b1 else b0
   let succ (len,t) = len, Z.succ t
   let pred (len,t) = len, Z.pred t
 
@@ -22,11 +19,9 @@ module Bignum_of_z : Bignum with type t = bignum = struct
     let len = hi - lo + 1 in
     len, Z.extract z lo len
 
-  let one width = of_int ~width 1
-  let zero width = of_int ~width 0
   let ones width = of_int ~width (-1)
-  let is_zero w = w = zero (bitwidth w)
-  let is_one w = w = one(bitwidth w)
+  let is_zero w = w = of_int ~width:(bitwidth w) 0
+  let is_one w = w = of_int ~width:(bitwidth w) 1
   let is_positive (_,x) = Z.sign x = 1
   let is_negative (_,x) = Z.sign x = -1
 
@@ -49,9 +44,6 @@ module Bignum_of_z : Bignum with type t = bignum = struct
   let ( / ) x y = binop Z.( / ) x y
   let ( = ) (lenx,x) (leny,y) = Z.equal x y
   let ( < ) (lenx,x) (leny,y) = Z.lt x y
-  let ( > ) (lenx,x) (leny,y) = Z.gt x y
-  let ( <= ) (lenx,x) (leny,y) = Z.leq x y
-  let ( >= ) (lenx,x) (leny,y) = Z.geq x y
 
   let (lsl) (lenx,x) sh = lenx, Z.(x lsl sh)
   let (lxor) (lenx,x) (leny,y)  = infer_length lenx leny, Z.(x lxor y)
