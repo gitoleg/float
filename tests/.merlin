@@ -4,6 +4,8 @@ S .
 B ../_build/lib
 B ../_build/tests
 
-PKG zarith
 PKG core_kernel
+PKG zarith
 PKG oUnit
+
+FLG -short-paths

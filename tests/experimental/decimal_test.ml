@@ -445,3 +445,183 @@ let suite () =
   ]
 
 let () = run_test_tt_main (suite ())
+
+
+
+
+
+
+
+(* module Run_dec = struct *)
+(*   open Pervasives *)
+(*   open Gfloat *)
+
+(*   type value = { *)
+(*     sign : int; *)
+(*     expn : int64; *)
+(*     frac : int64; *)
+(*   } [@@deriving sexp] *)
+
+(*   type name = Add | Sub | Div | Mul [@@deriving sexp] *)
+
+(*   type t = { *)
+(*     name : name; *)
+(*     op1 : value; *)
+(*     op2 : value; *)
+(*     res : value; *)
+(*     rnd : int; *)
+(*     origin : string; *)
+(*   } [@@deriving sexp] *)
+
+
+(*   let ebits = 10 *)
+(*   let fbits = 54 *)
+(*   let desc = desc ~radix:10 ~expn_bits:ebits fbits *)
+
+(*   let create sign ~expn frac = *)
+(*     let x = create desc ~expn:(ebits,expn) (fbits, frac) in *)
+(*     if sign <> 0 then Gfloat_z.neg x *)
+(*     else x *)
+
+(*   let gfloat_of_value v = *)
+(*     let expn = Z.of_int64 v.expn in *)
+(*     let frac = Z.of_int64 v.frac in *)
+(*     create v.sign ~expn frac *)
+
+(*   let to_string is_neg e f = *)
+(*     let sign = if is_neg then "-" else "" in *)
+(*     sprintf "%s %Ld 0x%Lx" sign e f *)
+
+(*   let string_of_value v = to_string (v.sign = 1) v.expn v.frac *)
+
+(*   let string_of_test test = *)
+(*     let binop = match test.name with *)
+(*       | Add -> "+" *)
+(*       | Sub -> "-" *)
+(*       | Mul -> "*" *)
+(*       | Div -> "/" in *)
+(*     sprintf " %s %s %s = %s (origin %s)" *)
+(*       (string_of_value test.op1) *)
+(*       binop *)
+(*       (string_of_value test.op2) *)
+(*       (string_of_value test.res) *)
+(*       test.origin *)
+
+(*   let string_of_gfloat x = match Gfloat_z.fin x with *)
+(*     | None -> "not a number" *)
+(*     | Some ((_,e), (_,f)) -> *)
+(*       to_string (Gfloat_z.is_neg x) (Z.to_int64 e) (Z.to_int64 f) *)
+
+(*   let equal expected (sign,expn,frac) = *)
+(*     (sign = expected.res.sign && Int64.(expected.res.frac = zero) && Z.(frac = zero)) || *)
+(*     (Z.to_int64 expn = expected.res.expn && *)
+(*      Z.to_int64 frac = expected.res.frac && *)
+(*      sign = expected.res.sign) *)
+
+(*   let num = ref 0 *)
+
+(*   let print_report test ours = *)
+(*     printf "%d fail: %s\n%s\n\n" !num *)
+(*       (string_of_test test) (string_of_gfloat ours) *)
+
+(*   let fails = ref [] *)
+(*   let oks = ref [] *)
+(*   let add where what = where := what :: !where *)
+
+
+(*   let run_test test = *)
+(*     let op = match test.name with *)
+(*       | Add -> Gfloat_z.add *)
+(*       | Sub -> Gfloat_z.sub *)
+(*       | Mul -> Gfloat_z.mul *)
+(*       | Div -> Gfloat_z.div in *)
+(*     let x = gfloat_of_value test.op1 in *)
+(*     let y = gfloat_of_value test.op2 in *)
+(*     let r = op x y in *)
+(*     let equal = match Gfloat_z.fin r with *)
+(*       | Some ((_,expn),(_,frac)) -> *)
+(*         let sign = if Gfloat_z.is_neg r then 1 else 0 in *)
+(*         equal test (sign,expn,frac) *)
+(*       | None -> false in *)
+(*     incr num; *)
+(*     if equal then *)
+(*       let () = printf "%d ... ok\n" !num in *)
+(*       add oks test *)
+(*     else *)
+(*       let () = print_report test r in *)
+(*       add fails test *)
+
+(*   let output_tests name tests = *)
+(*     Out_channel.with_file name *)
+(*       ~f:(fun ch -> *)
+(*           let lines = List.map tests ~f:(fun t -> *)
+(*               Sexp.to_string (sexp_of_t t)) in *)
+(*           Out_channel.output_lines ch lines) *)
+
+(*   (\* let () = at_exit (fun () -> *\) *)
+(*   (\*     output_tests "oks.out" !oks; *\) *)
+(*   (\*     output_tests "fails.out" !fails) *\) *)
+
+(*   let () = *)
+(*     let lines = In_channel.with_file "fails.out" ~f:In_channel.input_lines in *)
+(*     let tests = List.map lines ~f:(fun line -> Sexp.of_string line |> t_of_sexp) in *)
+(*     List.iter tests ~f:run_test *)
+
+
+(* end *)
+
+
+
+
+open Pervasives
+
+type value = {
+  sign : int;
+  expn : int64;
+  frac : int64;
+} [@@deriving sexp]
+
+type name = Add | Sub | Div | Mul [@@deriving sexp]
+
+type t = {
+  name : name;
+  op1 : value;
+  op2 : value;
+  res : value;
+  rnd : int;
+  origin : string;
+} [@@deriving sexp]
+
+
+let run_test t =
+  let binop,op = match t.name with
+    | Add -> "+", "add"
+    | Sub -> "-", "sub"
+    | Mul -> "*", "mul"
+    | Div -> "/", "div" in
+  let string_of_value v =
+    let sign = if v.sign = 0 then Pos else Neg in
+    let sign = Sexp.to_string (sexp_of_sign sign) in
+    sprintf "(%s,0x%LxL,0x%LxL)" sign v.expn v.frac in
+  let docstring =
+    sprintf "(%s %s %s = %s)"
+      (string_of_value t.op1)
+      binop
+      (string_of_value t.op2)
+      (string_of_value t.res) in
+  let camlstring =
+    sprintf "((%s ~rm:%s,%s,%s) = %s)"
+      op
+      (Sexp.to_string (sexp_of_rounding (rnd_of_int t.rnd)))
+      (string_of_value t.op1)
+      (string_of_value t.op2)
+      (string_of_value t.res) in
+  let test_anot = sprintf "\"%s\" >::\n %s;\n "
+      docstring camlstring in
+  printf "%s\n" test_anot
+
+
+let () =
+  let lines = In_channel.with_file "fails.out" ~f:In_channel.input_lines in
+  let tests = List.map lines ~f:(fun line -> Sexp.of_string line |> t_of_sexp) in
+  List.iter tests ~f:run_test

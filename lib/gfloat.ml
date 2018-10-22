@@ -13,6 +13,7 @@ type loss =
   | ExactlyHalf
   | LessThanHalf
   | MoreThanHalf
+[@@deriving sexp]
 
 (** digit position from in range [0 .. base - 1] relative to [base/2] *)
 type digit = Middle | Less | More | Zero
@@ -31,16 +32,11 @@ module type Bignum = sig
   type t
   val of_int : width:int -> int -> t
   val to_int : t -> int
-  val succ : t -> t
-  val pred : t -> t
   val ones : int -> t
   val bitwidth : t -> int
-  val is_zero : t -> bool
-  val is_one  : t -> bool
   val is_positive : t -> bool
   val is_negative : t -> bool
   val abs : t -> t
-  val max : t -> t -> t
   val extract : ?hi:int -> ?lo:int -> t -> t
   val testbit : t -> int -> bool
   val zero_extend : t -> int -> t
@@ -52,6 +48,7 @@ module type Bignum = sig
   val ( < ) : t -> t -> bool
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
+  val toz : t -> Z.t             (* TMP!  *)
 end
 
 module Make(Bignum : Bignum) = struct
@@ -75,9 +72,22 @@ module Make(Bignum : Bignum) = struct
     let one width = of_int ~width 1
     let zero width = of_int ~width 0
 
+    let is_one x = x = one (bitwidth x)
+    let is_zero x = x = zero (bitwidth x)
+
+    let succ x =
+      let one = one (bitwidth x) in
+      x + one
+
+    let pred x =
+      let one = one (bitwidth x) in
+      x - one
+
     let ( > ) x y = y < x
     let ( <= ) x y = x < y || x = y
     let ( >= ) x y = x > y || x = y
+
+    let max x y = if x > y then x else y
 
   end
 
@@ -145,6 +155,7 @@ module Make(Bignum : Bignum) = struct
   (* TODO: add expn here and if all ones - adust it  *)
   let round rm sign frac loss =
     let is_need = match rm, loss with
+      | _, ExactlyZero -> false
       | Positive_inf,_ -> sign = Pos
       | Negative_inf,_ -> sign = Neg
       | Nearest_away, (ExactlyHalf | MoreThanHalf)
@@ -317,7 +328,7 @@ module Make(Bignum : Bignum) = struct
         let payload = Bignum.one prec  in
         let shift = prec - 2 in
         let payload = Bignum.(payload lsl shift) in
-        Bignum.(payload + Bignum.b1) in
+        Bignum.succ payload in
     let data = Nan (signaling, payload) in
     {sign; desc; data}
 
@@ -431,8 +442,13 @@ module Make(Bignum : Bignum) = struct
   let extract prec frac = Bignum.extract ~hi:(prec - 1) frac
 
   let add rm a b =
+    printf "call add\n";
     let common_ground base x y =
       if Bignum.(x.expn = y.expn) then x,y,ExactlyZero
+      else if Bignum.is_zero x.frac then
+        {x with expn = y.expn} ,y,ExactlyZero
+      else if Bignum.is_zero y.frac then
+        x,{y with expn = x.expn },ExactlyZero
       else
         let x,y = balance base x y in
         let expn = Bignum.max x.expn y.expn in
@@ -445,10 +461,20 @@ module Make(Bignum : Bignum) = struct
     check_operands a b;
     match a.data, b.data with
     | Fin x, Fin y ->
+      let tos q = sprintf "(%s %s)"
+          (Z.to_string (Bignum.toz q.expn))
+          (Z.to_string (Bignum.toz q.frac)) in
+      printf "input %s %s\n" (tos x) (tos  y);
       let x = maximize_exponent (radix a) x in
       let y = maximize_exponent (radix a) y in
+      printf "max %s %s\n" (tos x) (tos  y);
       let x,y,loss = common_ground (radix a) x y in
+      printf "common %s %s (%s)\n" (tos x) (tos y)
+        (Sexp.to_string (sexp_of_loss loss));
       let frac = Bignum.(x.frac + y.frac) in
+      printf "frac1 %s\n" (Z.to_string (Bignum.toz frac));
+      let frac_ = round rm Pos frac loss in
+      printf "frac2 %s\n" (Z.to_string (Bignum.toz frac_));
       let data =
         if Bignum.(frac >= x.frac) then
           Fin (norm (radix a) {expn=x.expn; frac=round rm Pos frac loss})
@@ -474,17 +500,23 @@ module Make(Bignum : Bignum) = struct
     | _, Inf -> b
 
   let sub rm a b =
+    printf "call sub\n";
     let common_ground base x y =
       if Bignum.(x.expn = y.expn) then x,y,ExactlyZero, Bignum.(x.frac < y.frac)
+      else if Bignum.is_zero x.frac then
+        {x with expn = y.expn}, y, ExactlyZero, true
+      else if Bignum.is_zero y.frac then
+        x, {y with expn = x.expn}, ExactlyZero, false
       else
         let expn = Bignum.max x.expn y.expn in
+        let uno = Bignum.one a.desc.ebits in
         if Bignum.(x.expn > y.expn) then
-          let x = unsafe_lshift base x Bignum.b1 in
-          let y, loss = unsafe_rshift base y Bignum.(expn - y.expn - Bignum.b1) in
+          let x = unsafe_lshift base x uno in
+          let y, loss = unsafe_rshift base y Bignum.(expn - y.expn - uno) in
           x, y, loss, false
         else
-          let x,loss = unsafe_rshift base x Bignum.(expn - x.expn - Bignum.b1) in
-          let y = unsafe_lshift base y Bignum.b1 in
+          let x,loss = unsafe_rshift base x Bignum.(expn - x.expn - uno) in
+          let y = unsafe_lshift base y uno in
           x,y,loss, true in
     check_operands a b;
     match a.data, b.data with
@@ -495,7 +527,9 @@ module Make(Bignum : Bignum) = struct
       let y = extend y (prec a) in
       let x,y,loss,reverse = common_ground (radix a) x y in
       let loss = invert_loss loss in
-      let borrow = if loss = ExactlyZero then Bignum.b0 else Bignum.b1 in
+      let borrow = if loss = ExactlyZero then
+          Bignum.zero (bits_in x.frac)
+        else Bignum.one (bits_in x.frac) in
       let frac = if reverse then Bignum.(y.frac - x.frac - borrow)
         else Bignum.(x.frac - y.frac - borrow) in
       let sign = if reverse then revert_sign a.sign else a.sign in
@@ -521,6 +555,12 @@ module Make(Bignum : Bignum) = struct
     let s2 = Bignum.of_sign a.sign in
     let s3 = Bignum.of_sign b.sign in
     let is_subtract = Bignum.is_one Bignum.(s1 lxor (s2 lxor s3)) in
+
+    let bts x = Z.to_string (Bignum.toz x) in
+    printf "test s2 %s %b\n" (bts s2) (a.sign = Pos);
+    printf "test s3 %s\n" (bts s3);
+    printf "test %s\n" (bts (Bignum.((s2 lxor s3))));
+
     if is_subtract then sub rm a b
     else add rm a b
 

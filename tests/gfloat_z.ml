@@ -11,8 +11,6 @@ module Bignum_of_z : Bignum with type t = bignum = struct
   let of_z ~width z = width, z
   let to_z (_,z) = z
   let bitwidth (w,_) = w
-  let succ (len,t) = len, Z.succ t
-  let pred (len,t) = len, Z.pred t
 
   let extract ?hi ?(lo = 0) (w,z) =
     let hi = Option.value ~default:(w-1) hi in
@@ -28,15 +26,20 @@ module Bignum_of_z : Bignum with type t = bignum = struct
   let testbit (_,w) i = Z.testbit w i
 
   let zero_extend (w,x) w' = w + w', x
-  let infer_length lenx leny = max lenx leny
+
+  let assert_length lenx leny =
+    if lenx <> leny then
+      failwith "attempting to operate over bignums with different length"
+
+  let tos = Z.to_string
 
   let binop op (lenx,x) (leny,y) =
-    let len = infer_length lenx leny in
+    assert_length lenx leny;
     let res' = op x y in
     let sign = Z.sign res' in
-    let res'' = Z.extract (Z.abs res') 0 len in
+    let res'' = Z.extract (Z.abs res') 0 lenx in
     let res = if sign = -1 then Z.neg res'' else res'' in
-    len, res
+    lenx, res
 
   let ( + ) x y = binop Z.( + ) x y
   let ( - ) x y = binop Z.( - ) x y
@@ -46,11 +49,12 @@ module Bignum_of_z : Bignum with type t = bignum = struct
   let ( < ) (lenx,x) (leny,y) = Z.lt x y
 
   let (lsl) (lenx,x) sh = lenx, Z.(x lsl sh)
-  let (lxor) (lenx,x) (leny,y)  = infer_length lenx leny, Z.(x lxor y)
+  let (lxor) (lenx,x) (leny,y)  = assert_length lenx leny; lenx, Z.(x lxor y)
 
   let abs (len,w) = len, Z.abs w
   let max x y = if x < y then y else x
 
+  let toz (_,z) = z
 end
 
 include Make(Bignum_of_z)
