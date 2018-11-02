@@ -27,6 +27,13 @@ double sub(double x, double y, APFloatBase::roundingMode md) {
     return a.convertToDouble();
 }
 
+double mul(double x, double y, APFloatBase::roundingMode md) {
+    detail::IEEEFloat a(x);
+    detail::IEEEFloat b(y);
+    a.multiply(b, md);
+    return a.convertToDouble();
+}
+
 double my_sqrt(double x) {
     APFloatBase::roundingMode rm = APFloatBase::rmNearestTiesToEven;
     detail::IEEEFloat src(x);
@@ -254,7 +261,10 @@ void mysin(double a) {
 
 void test() {
     mysin(0.5);
-
+    apf aa(APFloatBase::IEEEdouble(), APInt(64, 8L));
+    apf bb(APFloatBase::IEEEdouble(), APInt(64, 4664551878363631856L));
+    aa.multiply(bb, APFloatBase::rmNearestTiesToAway);
+    std::cout << "llvm res " <<  aa.convertToDouble() << std::endl;
     // std::cout << "rmNearestTiesToEven:" << add(3.5, 4.2, APFloatBase::rmNearestTiesToEven) << std::endl
     //           << "rmTowardPositive   :" << add(3.5, 4.2, APFloatBase::rmTowardPositive) << std::endl
     //           << "rmTowardNegative   :" << add(3.5, 4.2, APFloatBase::rmTowardNegative) << std::endl

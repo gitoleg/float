@@ -40,10 +40,8 @@ let make_gfloat = function
   | Def (sign,expn,frac) ->
     let expn = Z.of_int64 expn in
     let frac = Z.of_int64 frac in
-    let x = create desc ~expn:(ebits,expn) (fbits, frac) in
-    if Gfloat_z.is_pos x && sign = Neg then
-      Gfloat_z.neg x
-    else x
+    let negative = sign = Neg in
+    create desc ~negative ~expn:(ebits,expn) (fbits, frac)
 
 
 let triple_to_string (sign,expn,frac) =
@@ -180,9 +178,6 @@ let suite () =
     (* "(inf + (Pos,0x18e,0x0) = inf)" >:: *)
     (* ((add ~rm:Nearest_even,(Inf Pos),(Def (Pos,0x18eL,0x0L))) = (Inf Pos)); *)
 
-    "((Neg,0x0,0xfc01548e8c24d385) + (Neg,0x0,0x190000460e3) = (Neg,0x0,0xfc01548e8c24d385))" >::
-    ((add ~rm:Nearest_even,(Def (Neg,0x0L,0xfc01548e8c24d385L)),(Def (Neg,0x0L,0x190000460e3L))) = (Def (Neg,0x0L,0xfc01548e8c24d385L)));
-
     (* "((-inf) + (-inf) = (-inf))" >:: *)
     (* ((add ~rm:Nearest_even,(Inf Neg),(Inf Neg)) = (Inf Neg)); *)
 
@@ -203,8 +198,6 @@ let suite () =
 
     (* "((-inf) + (Pos,0x24e,0x154d8203c5a840) = (-inf))" >:: *)
     (* ((add ~rm:Nearest_even,(Inf Neg),(Def (Pos,0x24eL,0x154d8203c5a840L))) = (Inf Neg)); *)
-
-
 
 
     (* "(inf - (Neg,0x18e,0x0) = inf)" >:: *)
@@ -255,8 +248,8 @@ let suite () =
     (* "((-inf) * (-inf) = inf)" >:: *)
     (* ((mul ~rm:Positive_inf,(Inf Neg),(Inf Neg)) = (Inf Pos)); *)
 
-    (* "((Pos,0x2e9,0x130a9955f87cf6) * (Pos,0x0,0x2) = (Pos,0x15c,0x3ceeb779818fe))" >:: *)
-    (* ((mul ~rm:Positive_inf,(Def (Pos,0x2e9L,0x130a9955f87cf6L)),(Def (Pos,0x0L,0x2L))) = (Def (Pos,0x15cL,0x3ceeb779818feL))); *)
+      "((Pos,0x2e9,0x130a9955f87cf6) * (Pos,0x0,0x2) = (Pos,0x15c,0x3ceeb779818fe))" >::
+    ((mul ~rm:Positive_inf,(Def (Pos,0x2e9L,0x130a9955f87cf6L)),(Def (Pos,0x0L,0x2L))) = (Def (Pos,0x15cL,0x3ceeb779818feL)));
 
     (* "((Pos,0xd,0x1) * (Neg,0x180,0x3328b944c4000) = (Neg,0x0,0x51dac207a000))" >:: *)
     (* ((mul ~rm:Positive_inf,(Def (Pos,0xdL,0x1L)),(Def (Neg,0x180L,0x3328b944c4000L))) = (Def (Neg,0x0L,0x51dac207a000L))); *)

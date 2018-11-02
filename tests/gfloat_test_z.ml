@@ -1,8 +1,7 @@
 open Core_kernel
 open OUnit2
-open Bap.Std
 open Gfloat
-open Gfloat_w
+open Gfloat_z
 
 let msb w =
   let rec run n =
@@ -22,7 +21,7 @@ let inf_bits = Int64.bits_of_float Caml.infinity
 let ninf_bits = Int64.bits_of_float Caml.neg_infinity
 let nan_bits = Int64.bits_of_float Caml.nan
 
-let allow_output = false
+let allow_output = true
 
 let printf fmt =
   let doit str =
@@ -34,24 +33,30 @@ let double_of_float x =
   let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
   let negative = x < 0.0 in
   let create ~expn frac =
-    create desc ~negative ~expn frac in
+    printf "\ncreation started: %s\n" (Z.to_string expn);
+    let r = create desc ~negative ~expn:(double_ebits,expn) (double_fbits + 1,frac) in
+    printf "created\n\n";
+    r in
   let bits = Int64.bits_of_float x in
   if Int64.(bits = inf_bits) then inf desc
   else if Int64.(bits = ninf_bits) then inf desc ~negative:true
   else if Int64.(bits = nan_bits) then nan desc
   else
-    let bits = Word.of_int64 bits in
-    let expn = Word.to_int_exn (Word.extract_exn ~hi:62 ~lo:52 bits) in
+    let bits = Z.of_int64 bits in
+    let negative = Z.testbit bits 63 in
+    let expn = Z.to_int (Z.extract bits 52 11) in
     printf "\nmaking %g\n" x;
     printf  "  expn create: %d\n" expn ;
-    let frac = Word.extract_exn ~hi:51 bits in
+    let frac = Z.extract bits 0 52 in
     let expn' = expn - double_bias in
-    if Int.(expn = 0) && Word.is_zero frac then zero desc
+    printf  "  expn' create: %d\n" expn' ;
+    if Int.(expn = 0) && Z.(frac = zero) then zero desc
     else
       let dexp = if expn = 0 then 0 else 52 in
-      let expn = expn' - dexp in
-      let expn = Word.of_int ~width:double_ebits expn in
-      let frac = Word.(concat b1 frac) in
+      let expn = Z.of_int (expn' - dexp) in
+      printf "  finally %s\n" (Z.to_string expn);
+      let frac = Z.((one lsl 52) lor frac) in
+      let frac = if negative then Z.neg frac else frac in
       create ~expn frac
 
 let normalize_ieee biased_expn frac =
@@ -99,12 +104,9 @@ let int64_of_bits is_neg expn frac =
 let float_of_double t =
   if is_zero t then if is_neg t then ~-. 0.0 else 0.0
   else if is_fin t then
-    let (expn, frac) = Option.value_exn (fin t) in
-    let expn = Word.signed expn in
-    let expn = Word.to_int_exn expn in
-    let frac = Word.to_int64_exn frac in
-    printf "of_double: expn %d, frac %Ld\n" expn frac;
-
+    let (_,expn), (_,frac) = Option.value_exn (fin t) in
+    let expn = Z.to_int expn in
+    let frac = Z.to_int64 frac in
     let expn = double_bias + expn in
     let dexpn = if expn = 0 then 0 else 52 in
     let expn = expn + dexpn in
@@ -222,7 +224,7 @@ let truncate str =
     is_neg, Z.to_string frac, expn
 
 let create_decimal negative ~expn frac =
-  create decimal_desc ~negative ~expn frac
+  create decimal_desc ~negative ~expn:(decimal_expn_bits,expn) (decimal_precision,frac)
 
 let decimal_of_string = function
   | "nan" -> nan decimal_desc
@@ -231,13 +233,10 @@ let decimal_of_string = function
   | str ->
     let negative, frac, expn = truncate str in
     if is_zero_float frac then
-      let expn = Word.zero decimal_expn_bits in
-      let frac = Word.zero decimal_precision in
-      create_decimal negative ~expn frac
+      create_decimal negative ~expn:Z.zero Z.zero
     else
-      let frac = Word.of_int64 ~width:decimal_precision
-                   (Int64.of_string frac) in
-      let expn = Word.of_int ~width:decimal_expn_bits expn in
+      let frac = Z.of_string frac in
+      let expn = Z.of_int expn in
       create_decimal negative ~expn frac
 
 let truncate_float f =
@@ -252,9 +251,9 @@ let attach_sign x t = if is_neg t then ~-. x else x
 let string_of_decimal t =
   let attach_sign x = if is_neg t then "-" ^ x else x in
   if is_fin t then
-    let (expn,frac) = Option.value_exn (fin t) in
-    let expn = Word.to_int_exn expn in
-    let frac = Word.string_of_value ~hex:false frac in
+    let (_,expn),(_,frac) = Option.value_exn (fin t) in
+    let expn = Z.to_int expn in
+    let frac = Z.to_string frac in
     insert_point frac expn |> attach_sign
   else if is_nan t then attach_sign "nan"
   else attach_sign "inf"
@@ -389,7 +388,8 @@ module Debug = struct
       Seq.drop bits (b_len - w_len)
     else bits
 
-  let string_of_bits w =
+  let string_of_bits width w =
+    let w = Word.of_int64 ~width w in
     let bits = enum_bits w in
     let (@@) = sprintf "%s%d" in
     Seq.fold bits ~init:"" ~f:(fun s x ->
@@ -407,18 +407,6 @@ module Debug = struct
         let s = sprintf "%s%s" acc a in
         if x then s @@ 1
         else s @@ 0)
-
-  let wi = Word.to_int_exn
-
-  let deconstruct64 x =
-    let y = Int64.bits_of_float x in
-    let w = Word.of_int64 y in
-    let expn = Word.extract_exn ~hi:62 ~lo:52 w in
-    let bias = Word.of_int ~width:11 1023 in
-    let expn = Word.(signed (expn - bias)) in
-    let frac = Word.extract_exn ~hi:51 w in
-    printf "ocaml %f: unbiased expn %d, frac %s, ( %d)\n"
-      x (wi expn) (string_of_bits frac) (wi frac)
 end
 
 let sb = Debug.string_of_bits64
@@ -437,13 +425,13 @@ let is_ok_binop2 op x y =
   printf "\nreal: %g, ours: %g\n" real ours;
   equal_base2 real ours
 
-let is_ok_binop10 op x y = true
-  (* let op_real,op_ours = get_binop op in
-   * let x = truncate_float x in
-   * let y = truncate_float y in
-   * let real = op_real x y in
-   * let ours = base10_binop op_ours x y in
-   * equal_base10 real ours *)
+let is_ok_binop10 op x y =
+  let op_real,op_ours = get_binop op in
+  let x = truncate_float x in
+  let y = truncate_float y in
+  let real = op_real x y in
+  let ours = base10_binop op_ours x y in
+  equal_base10 real ours
 
 let binop op x y ctxt =
   let op_str = string_of_binop op x y in
@@ -466,16 +454,14 @@ let is_ok_unop2 op x =
   let op_real, op_ours = get_unop op in
   let real = op_real x in
   let ours = base2_unop op_ours x in
-  printf "\nreal: %s\nours: %s\n" (sb real) (sb ours);
-  printf "\nreal: %g, ours: %g\n" real ours;
   equal_base2 real ours
 
-let is_ok_unop10 op x = true
-  (* let x = truncate_float x in
-   * let op_real, op_ours = get_unop op in
-   * let real = op_real x in
-   * let ours = base10_unop op_ours x in
-   * equal_base10 real ours *)
+let is_ok_unop10 op x =
+  let x = truncate_float x in
+  let op_real, op_ours = get_unop op in
+  let real = op_real x in
+  let ours = base10_unop op_ours x in
+  equal_base10 real ours
 
 let unop op x ctxt =
   let op_str = string_of_unop op x in
@@ -540,7 +526,7 @@ let make_int64 sign_bit expn frac =
 
 let make_float sign expn frac =
   let x = make_int64 sign expn frac in
-  printf "make_float %d %d -> %Ld\n" expn frac x;
+  printf "%d %d -> %Ld\n" expn frac x;
   let r = Int64.float_of_bits x in
   r
 
@@ -743,16 +729,20 @@ let suite () =
     (* random - +,-,*,/ with a random operands for radix=2 *)
   ] (* @ make_random2 ~times:2 *)
 
+let test_extract () =
+  let module Z = Bignum_of_z in
+  let z = Z.of_int ~width:8 54 in
+  let x1 = Z.extract ~hi:5 z |> Z.to_int in
+  let x2 = Z.extract ~hi:4 z |> Z.to_int in
+  let x3 = Z.extract ~hi:3 z |> Z.to_int in
+  printf "test extract: %d %d %d\n" x1 x2 x3
 
-
-let _suite () =
+let suite () =
   let x = make_float 0 0 8 in
   let y = make_float 0 1035 3326264035168496 in
-  Debug.deconstruct64 1.5;
-  (* test_create 0.0; *)
   "test" >::: [
+      "" >:: 0.0 + 0.5;
       (* "" >:: x * y; *)
-      "" >:: sqrt 2.0
     ]
 
 let () = run_test_tt_main (suite ())

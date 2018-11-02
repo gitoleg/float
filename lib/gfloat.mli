@@ -19,9 +19,6 @@ module type Bignum = sig
   val to_int : t -> int
   val ones : int -> t
   val bitwidth : t -> int
-  val is_positive : t -> bool
-  val is_negative : t -> bool
-  val abs : t -> t
   val extract : ?hi:int -> ?lo:int -> t -> t
   val testbit : t -> int -> bool
   val zero_extend : t -> int -> t
@@ -33,7 +30,10 @@ module type Bignum = sig
   val ( < ) : t -> t -> bool
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
-  val toz : t -> Z.t
+  val lnot : t -> t
+
+  val to_string : t -> string
+  val tow : t -> Bap.Std.word
 end
 
 module Make(B : Bignum) : sig
@@ -42,7 +42,7 @@ module Make(B : Bignum) : sig
 
   (** [create ~radix expn frac] creates gfloat from radix, signed expn
       and fraction.  *)
-  val create : desc -> expn:B.t -> B.t -> t
+  val create : desc -> ?negative:bool -> expn:B.t -> B.t -> t
 
   (** [zero ~radix expn_bits prec] creates gfloat equaled to zero from
       radix, exponent bits and precision *)

@@ -7,5 +7,6 @@ B ../_build/tests
 PKG core_kernel
 PKG zarith
 PKG oUnit
+PKG bap
 
 FLG -short-paths

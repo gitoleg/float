@@ -1,0 +1,7 @@
+PKG bap
+PKG core_kernel
+
+S .
+B ../_build/lib
+
+REC

@@ -35,11 +35,18 @@ module Bignum_of_z : Bignum with type t = bignum = struct
 
   let binop op (lenx,x) (leny,y) =
     assert_length lenx leny;
+    let x = Z.extract x 0 lenx in
+    let y = Z.extract y 0 lenx in
     let res' = op x y in
     let sign = Z.sign res' in
     let res'' = Z.extract (Z.abs res') 0 lenx in
     let res = if sign = -1 then Z.neg res'' else res'' in
     lenx, res
+
+  let toz (w,z) =
+    if Z.(z < zero) then
+      Z.signed_extract z 0 w
+    else Z.extract z 0 w
 
   let ( + ) x y = binop Z.( + ) x y
   let ( - ) x y = binop Z.( - ) x y
@@ -54,7 +61,9 @@ module Bignum_of_z : Bignum with type t = bignum = struct
   let abs (len,w) = len, Z.abs w
   let max x y = if x < y then y else x
 
-  let toz (_,z) = z
+
+  let to_string (_,z) = Z.to_string z
+
 end
 
 include Make(Bignum_of_z)

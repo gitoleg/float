@@ -1,5 +1,50 @@
 open Core_kernel
 
+let allow_output = ref false
+
+let printf fmt =
+  let doit str =
+    if !allow_output then
+      printf "%s" str in
+  ksprintf doit fmt
+
+
+module Debug = struct
+  open Bap.Std
+
+  let enum_bits w =
+    let bits = Word.(enum_bits w BigEndian) in
+    let b_len = Seq.length bits in
+    let w_len = Word.bitwidth w in
+    if b_len > w_len then
+      Seq.drop bits (b_len - w_len)
+    else bits
+
+  let string_of_bits w =
+    let bits = enum_bits w in
+    let (@@) = sprintf "%s%d" in
+    Seq.fold bits ~init:"" ~f:(fun s x ->
+        if x then s @@ 1
+        else s @@ 0)
+
+  let string_of_bits64 x =
+    let w = Word.of_int64 x in
+    let bits = enum_bits w in
+    let (@@) = sprintf "%s%d" in
+    Seq.foldi bits ~init:"" ~f:(fun i acc x ->
+        let a =
+          if i = 1 || i = 12 then "_"
+          else "" in
+        let s = sprintf "%s%s" acc a in
+        if x then s @@ 1
+        else s @@ 0)
+
+  let bits_of_z bits z =
+    let w = Word.of_int64 ~width:bits (Z.to_int64 z) in
+    string_of_bits w
+
+end
+
 type rounding =
   | Nearest_even  (** round to nearest, ties to even *)
   | Nearest_away  (** round to nearest, ties to away *)
@@ -28,15 +73,14 @@ type desc = {
 
 let desc ~radix ~expn_bits fbits = {radix; fbits; ebits=expn_bits}
 
+let string_of_loss s = Sexp.to_string (sexp_of_loss s)
+
 module type Bignum = sig
   type t
   val of_int : width:int -> int -> t
   val to_int : t -> int
   val ones : int -> t
   val bitwidth : t -> int
-  val is_positive : t -> bool
-  val is_negative : t -> bool
-  val abs : t -> t
   val extract : ?hi:int -> ?lo:int -> t -> t
   val testbit : t -> int -> bool
   val zero_extend : t -> int -> t
@@ -48,7 +92,9 @@ module type Bignum = sig
   val ( < ) : t -> t -> bool
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
-  val toz : t -> Z.t             (* TMP!  *)
+  val lnot : t -> t
+  val to_string : t -> string             (* TODO: TEMP!  *)
+  val tow : t -> Bap.Std.word
 end
 
 module Make(Bignum : Bignum) = struct
@@ -56,6 +102,9 @@ module Make(Bignum : Bignum) = struct
   type bignum = Bignum.t
 
   module Bignum = struct
+
+    let msb x = Bignum.testbit x (Bignum.bitwidth x - 1)
+
     include Bignum
 
     let b0 = of_int ~width:1 0
@@ -75,22 +124,46 @@ module Make(Bignum : Bignum) = struct
     let is_one x = x = one (bitwidth x)
     let is_zero x = x = zero (bitwidth x)
 
-    let succ x =
-      let one = one (bitwidth x) in
-      x + one
-
-    let pred x =
-      let one = one (bitwidth x) in
-      x - one
+    let succ x = x + one (bitwidth x)
+    let pred x = x - one (bitwidth x)
 
     let ( > ) x y = y < x
     let ( <= ) x y = x < y || x = y
     let ( >= ) x y = x > y || x = y
 
-    let max x y = if x > y then x else y
+    let ( <$ ) x y =
+      let s1 = msb x in
+      let s2 = msb y in
+      if s1 && s2 then x < y
+      else if not (s1 || s2) then x < y
+      else s1
+
+    let ( >$ ) x y = y <$ x
+    let ( <=$ ) x y = x <$ y || x = y
+    let ( >=$ ) x y = x >$ y || x = y
+
+    let is_negative = msb
+    let is_positive x = not (msb x)
+    let is_non_negative x = is_positive x || is_zero x
+
+    let sign_extend x w =
+      let y = zero_extend x w in
+      if is_non_negative x then y
+      else
+        let ones = ones Pervasives.(2 * w) in
+        let ones = ones lsl w in
+        y + ones
+
+    let abs x =
+      if msb x then
+        lnot (x - one (bitwidth x))
+      else x
+
+    let max x y = if x >$ y then x else y
 
   end
 
+  let bs = Bignum.to_string
 
   type finite = {
     expn : bignum;
@@ -227,7 +300,7 @@ module Make(Bignum : Bignum) = struct
     let n = run 0 frac in
     let n' = Bignum.of_int ~width:(bits_in expn) n in
     let expn' = Bignum.(expn + n') in
-    if Bignum.(expn' < expn) then None
+    if Bignum.(expn' <$ expn) then None
     else
       let res, loss = rshift_frac base frac n in
       Some (expn', res, loss)
@@ -238,45 +311,50 @@ module Make(Bignum : Bignum) = struct
     | None -> failwith "Can't align right: exponent overflow"
 
   (* maximum possible exponent that fits in [n - 1] bits. (one for sign) *)
-  let max_exponent n =
-    int_of_float (2.0 ** (float_of_int (n - 1))) - 1
-
-  let min_exponent n = - (max_exponent n)
+  let max_exponent' n = int_of_float (2.0 ** (float_of_int (n - 1))) - 1
+  let min_exponent' n = - (max_exponent' n)
+  let max_exponent n = Bignum.of_int ~width:n (max_exponent' n)
+  let min_exponent n = Bignum.of_int ~width:n (min_exponent' n)
 
   (* the same as [align_right] above, but stops in case of bits loss
      OR if exponent reached a maximum of it's value *)
   let safe_align_right base expn frac =
-    let max_expn =
-      Bignum.of_int ~width:(bits_in expn) (max_exponent (bits_in expn)) in
+    let max_expn = max_exponent (bits_in expn) in
     let rec run expn x =
-      let expn' = Bignum.abs expn in
-      if Bignum.(expn' = max_expn) then
+      if Bignum.(expn >=$ max_expn) then
         expn, x
       else
         match rshift_frac base x 1 with
         | y, ExactlyZero -> run (Bignum.succ expn) y
         | _ -> expn, x in
     if Bignum.is_zero frac then expn,frac
-    else run expn frac
+    else
+      let e,x = run expn frac in
+      (* printf "safe align right %d\n" n; *)
+      e,x
 
   let safe_align_left base expn frac =
-    let min_expn =
-      Bignum.of_int ~width:(bits_in expn) (min_exponent (bits_in expn)) in
+    let min_expn = min_exponent (bits_in expn) in
     let width = bits_in frac in
-    let rec run expn x =
-      if Bignum.(expn = min_expn) then
-        expn, x
+    let rec run n expn x =
+      if Bignum.(expn <=$ min_expn) then
+        expn,x,n
       else
         let y = lshift_frac base x 1 in
-        let z = Bignum.extract ~lo:width y in
-        if Bignum.is_zero z then run (Bignum.pred expn) y
-        else expn,x in
+        if Bignum.testbit y width then expn,x,n
+        else run (n+1) (Bignum.pred expn) y in
     if Bignum.is_zero frac then expn, frac
     else
-      let frac = Bignum.zero_extend frac width in
-      let e,frac = run expn frac in
-      let frac = Bignum.extract ~hi:(width - 1) frac in
-      e,frac
+      let high = Bignum.extract ~lo:(width - 1) frac in
+      if Bignum.is_one high then
+        (* let () = printf "align left n is 0\n" in *)
+        expn, frac
+      else
+        let frac = Bignum.zero_extend frac width in
+        let e,frac,n = run 0 expn frac in
+        (* printf "align left n is %d\n" n; *)
+        let frac = Bignum.extract ~hi:(width - 1) frac in
+        e,frac
 
   (* min exponent without bit loss or exponent overflow,
      fraction shifted as left as possible, i.e. it occupies
@@ -298,21 +376,19 @@ module Make(Bignum : Bignum) = struct
   let radix x = x.desc.radix
 
   let zero desc =
-    let min = min_exponent desc.ebits in
-    let expn = Bignum.of_int ~width:desc.ebits min in
+    let expn = min_exponent desc.ebits in
     let frac = Bignum.zero desc.fbits in
     let data = {expn; frac} in
     {sign = Pos; desc; data = Fin data;}
 
-  let create desc ~expn frac =
-    let sign = if Bignum.(frac < Bignum.zero desc.fbits) then Neg else Pos in
-    let frac = Bignum.abs frac in
+  let create desc ?(negative = false) ~expn frac =
+    let sign = if negative then Neg else Pos in
     if Bignum.is_zero frac then
       let x = zero desc in
       {x with sign}
     else
-      let data = Fin (norm desc.radix {expn; frac}) in
-      {sign; desc; data; }
+      let data = norm desc.radix {expn; frac} in
+      {sign; desc; data = Fin data; }
 
   let inf ?(negative=false) desc =
     let sign = if negative then Neg else Pos in
@@ -419,15 +495,16 @@ module Make(Bignum : Bignum) = struct
 
   let balance base x y =
     match estimate_spot base x, estimate_spot base y with
-    | `Left,  _ when Bignum.(x.expn > y.expn) ->
-      minimize_exponent base x, y
-    | `Right, _ when Bignum.(x.expn < y.expn) ->
-      maximize_exponent base x, y
-    | _, `Left when Bignum.(x.expn < y.expn) ->
-      x, minimize_exponent base y
-    | _, `Right when Bignum.(x.expn > y.expn) ->
-      x, maximize_exponent base y
-    | _ -> minimize_exponent base x, minimize_exponent base y
+    | `Left,  _ when Bignum.(x.expn >$ y.expn) ->
+       minimize_exponent base x, y
+    | `Right, _ when Bignum.(x.expn <$ y.expn) ->
+       maximize_exponent base x, y
+    | _, `Left when Bignum.(x.expn <$ y.expn) ->
+       x, minimize_exponent base y
+    | _, `Right when Bignum.(x.expn >$ y.expn) ->
+       x, maximize_exponent base y
+    | _ ->
+       minimize_exponent base x, minimize_exponent base y
 
   (* [combine_loss more_signifincant less_significant]  *)
   let combine_loss more less =
@@ -441,8 +518,9 @@ module Make(Bignum : Bignum) = struct
   let extend x addend = { x with frac = Bignum.zero_extend x.frac addend }
   let extract prec frac = Bignum.extract ~hi:(prec - 1) frac
 
+  let tos x = sprintf "(%s %s)" (bs x.expn) (bs x.frac)
+
   let add rm a b =
-    printf "call add\n";
     let common_ground base x y =
       if Bignum.(x.expn = y.expn) then x,y,ExactlyZero
       else if Bignum.is_zero x.frac then
@@ -451,8 +529,15 @@ module Make(Bignum : Bignum) = struct
         x,{y with expn = x.expn },ExactlyZero
       else
         let x,y = balance base x y in
+
+        printf "balanced x: %s\n" (tos x);
+        printf "balanced y: %s\n" (tos y);
+
         let expn = Bignum.max x.expn y.expn in
-        if Bignum.(x.expn > y.expn) then
+
+        printf "max is %s\n" (bs expn);
+
+        if Bignum.(x.expn >$ y.expn) then
           let y, loss = unsafe_rshift base y Bignum.(expn - y.expn) in
           x, y, loss
         else
@@ -461,36 +546,40 @@ module Make(Bignum : Bignum) = struct
     check_operands a b;
     match a.data, b.data with
     | Fin x, Fin y ->
-      let tos q = sprintf "(%s %s)"
-          (Z.to_string (Bignum.toz q.expn))
-          (Z.to_string (Bignum.toz q.frac)) in
-      printf "input %s %s\n" (tos x) (tos  y);
-      let x = maximize_exponent (radix a) x in
-      let y = maximize_exponent (radix a) y in
-      printf "max %s %s\n" (tos x) (tos  y);
-      let x,y,loss = common_ground (radix a) x y in
-      printf "common %s %s (%s)\n" (tos x) (tos y)
-        (Sexp.to_string (sexp_of_loss loss));
-      let frac = Bignum.(x.frac + y.frac) in
-      printf "frac1 %s\n" (Z.to_string (Bignum.toz frac));
-      let frac_ = round rm Pos frac loss in
-      printf "frac2 %s\n" (Z.to_string (Bignum.toz frac_));
-      let data =
-        if Bignum.(frac >= x.frac) then
-          Fin (norm (radix a) {expn=x.expn; frac=round rm Pos frac loss})
-        else
-          let x = extend x (prec a) in
-          let y = extend y (prec a) in
-          let frac = Bignum.(x.frac + y.frac) in
-          match align_right (radix a) (prec a) x.expn frac with
-          | None -> Inf
-          | Some (expn, frac, loss') ->
-            let loss = if Bignum.(x.expn = expn) then loss
-              else combine_loss loss' loss in
-            let frac = extract (prec a) frac in
-            let frac = round rm Pos frac loss in
-            Fin (norm (radix a) {expn; frac}) in
-      { a with data }
+       let sb x = Debug.string_of_bits (Bignum.tow x) in
+
+       printf "input x: %s\n" (tos x);
+       printf "input y: %s\n" (tos y);
+       let x = maximize_exponent (radix a) x in
+
+       printf "maximizED x: %s %s\n" (tos x) (sb x.expn);
+
+
+
+       let y = maximize_exponent (radix a) y in
+       printf "maximized y: %s %s\n" (tos y) (sb y.expn);
+
+       let x,y,loss = common_ground (radix a) x y in
+       printf "common x: %s\n" (tos x);
+       printf "common y: %s\n" (tos y);
+
+       let frac = Bignum.(x.frac + y.frac) in
+       let data =
+         if Bignum.(frac >= x.frac) then
+           Fin (norm (radix a) {expn=x.expn; frac=round rm Pos frac loss})
+         else
+           let x = extend x (prec a) in
+           let y = extend y (prec a) in
+           let frac = Bignum.(x.frac + y.frac) in
+           match align_right (radix a) (prec a) x.expn frac with
+           | None -> Inf
+           | Some (expn, frac, loss') ->
+              let loss = if Bignum.(x.expn = expn) then loss
+                         else combine_loss loss' loss in
+              let frac = extract (prec a) frac in
+              let frac = round rm Pos frac loss in
+              Fin (norm (radix a) {expn; frac}) in
+       { a with data }
     | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
     | Nan _, _ -> a
     | _, Nan _ -> b
@@ -500,7 +589,6 @@ module Make(Bignum : Bignum) = struct
     | _, Inf -> b
 
   let sub rm a b =
-    printf "call sub\n";
     let common_ground base x y =
       if Bignum.(x.expn = y.expn) then x,y,ExactlyZero, Bignum.(x.frac < y.frac)
       else if Bignum.is_zero x.frac then
@@ -555,26 +643,37 @@ module Make(Bignum : Bignum) = struct
     let s2 = Bignum.of_sign a.sign in
     let s3 = Bignum.of_sign b.sign in
     let is_subtract = Bignum.is_one Bignum.(s1 lxor (s2 lxor s3)) in
-
-    let bts x = Z.to_string (Bignum.toz x) in
-    printf "test s2 %s %b\n" (bts s2) (a.sign = Pos);
-    printf "test s3 %s\n" (bts s3);
-    printf "test %s\n" (bts (Bignum.((s2 lxor s3))));
-
     if is_subtract then sub rm a b
     else add rm a b
 
   let add ?(rm=Nearest_even) = add_or_sub rm false
   let sub ?(rm=Nearest_even) = add_or_sub rm true
 
-  let expn_sum x y =
-    let is_pos = Bignum.is_positive in
-    let is_neg = Bignum.is_negative in
-    let e = Bignum.(x + y) in
-    if is_pos x && is_pos y && Bignum.(e < x) then `Overflow_expn
-    else
-    if is_neg x && is_neg y && Bignum.(e > x) then `Overflow_expn
-    else `Nice e
+  let multiply desc x y =
+    let xexpn = Bignum.sign_extend x.expn desc.ebits in
+    let yexpn = Bignum.sign_extend y.expn desc.ebits in
+    let xfrac = Bignum.zero_extend x.frac desc.fbits in
+    let yfrac = Bignum.zero_extend y.frac desc.fbits in
+    let expn = Bignum.(xexpn + yexpn) in
+    let frac = Bignum.(xfrac * yfrac) in
+    let max_expn =
+      Bignum.sign_extend (max_exponent desc.ebits) desc.ebits in
+    let min_expn =
+      Bignum.sign_extend (min_exponent desc.ebits) desc.ebits in
+    match align_right desc.radix desc.fbits expn frac with
+    | None -> `Overflow_expn
+    | Some (expn,frac,loss) ->
+       if Bignum.is_positive expn && Bignum.(expn > max_expn)
+       then `Overflow_expn
+       else if Bignum.is_positive expn then `Nice (expn,frac,loss)
+       else if
+         Bignum.is_negative expn && Bignum.(expn <$ min_expn) then
+         (* TODO  *)
+         let () = printf "THAT's a case!\n" in
+         (* shift right even more, trying to make expn = -1023  *)
+
+         `Overflow_expn
+       else `Nice (expn,frac,loss)
 
   let mul ?(rm=Nearest_even) a b =
     check_operands a b;
@@ -584,22 +683,16 @@ module Make(Bignum : Bignum) = struct
     | Fin _, Fin _ when is_zero b ->
       {b with sign = xor_sign a.sign b.sign}
     | Fin x, Fin y ->
-      let x = minimize_exponent (radix a) x in
-      let y = minimize_exponent (radix a) y in
+      let x = maximize_exponent (radix a) x in
+      let y = maximize_exponent (radix a) y in
       let sign = xor_sign a.sign b.sign in
       let precision = Bignum.bitwidth x.frac in
-      let data = match expn_sum x.expn y.expn with
+      let data = match multiply a.desc x y with
         | `Overflow_expn -> Inf
-        | `Nice expn ->
-          let x = extend x (prec a) in
-          let y = extend y (prec a) in
-          let zfrac = Bignum.(x.frac * y.frac) in
-          match align_right (radix a) precision expn zfrac with
-          | None -> Inf
-          | Some (expn, frac, loss) ->
-            let frac = Bignum.extract ~hi:(precision - 1) frac in
-            let frac = round rm sign frac loss in
-            Fin (norm (radix a) { expn; frac}) in
+        | `Nice (expn, frac, loss) ->
+           let frac = Bignum.extract ~hi:(precision - 1) frac in
+           let frac = round rm sign frac loss in
+           Fin (norm (radix a) { expn; frac}) in
       { a with data; sign }
     | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
     | Nan _, _ -> a
@@ -617,7 +710,7 @@ module Make(Bignum : Bignum) = struct
       let init = Bignum.zero (Bignum.bitwidth divisor) in
       List.fold digits ~init
         ~f:(fun data (digit, degree) -> set_digit data digit degree) in
-    let rec loop acc dividend degree =
+    let rec loop n acc dividend degree =
       let dividend, acc =
         if Bignum.(dividend >= divisor) then
           let res = Bignum.(dividend / divisor) in
@@ -631,9 +724,9 @@ module Make(Bignum : Bignum) = struct
           lshift_frac base dividend 1
         else dividend in
       if abs degree < digits then
-        loop acc dividend (degree - 1)
-      else List.rev acc, dividend in
-    let res, left = loop [] start_dividend 0 in
+        loop (n+1) acc dividend (degree - 1)
+      else List.rev acc, dividend, n in
+    let res, left, n = loop 0 [] start_dividend 0 in
     let res = List.map res ~f:(fun (d, deg) -> d, deg + digits) in
     let res = set_digits res in
     let loss =
@@ -648,15 +741,15 @@ module Make(Bignum : Bignum) = struct
   let digits_of_precision base exp_bits precision =
     let expn, frac =
       safe_align_left base (Bignum.zero exp_bits) (Bignum.one precision) in
-    Bignum.to_int expn |> abs
+    Bignum.abs expn |> Bignum.to_int
 
   let expn_dif x y =
     let is_pos = Bignum.is_positive in
     let is_neg = Bignum.is_negative in
     let e = Bignum.(x - y) in
-    if is_neg x && is_pos y && Bignum.(e > x) then `Underflow_expn
+    if is_neg x && is_pos y && Bignum.(e >$ x) then `Underflow_expn
     else
-    if is_pos x && is_neg y && Bignum.(e < x) then `Underflow_expn
+    if is_pos x && is_neg y && Bignum.(e <$ x) then `Underflow_expn
     else `Nice e
 
   let div ?(rm=Nearest_even) a b =
@@ -665,7 +758,7 @@ module Make(Bignum : Bignum) = struct
     let rec dif xfrac yfrac xexpn yexpn =
       match expn_dif xexpn yexpn with
       | `Underflow_expn -> None
-      | `Nice expn when Bignum.(xfrac >= yfrac) -> Some (expn, xfrac)
+      | `Nice expn when Bignum.(xfrac >=$ yfrac) -> Some (expn, xfrac)
       | `Nice expn ->
         let xfrac = lshift_frac (radix a) xfrac 1 in
         let one = Bignum.one (bits_in expn) in
@@ -675,23 +768,23 @@ module Make(Bignum : Bignum) = struct
     | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
     | Fin x, Fin y when is_zero b -> {a with data = Inf}
     | Fin x, Fin y ->
-      let x = minimize_exponent (radix a) x in
-      let y = minimize_exponent (radix a) y in
-      let sign = xor_sign a.sign b.sign in
-      let xfrac = Bignum.zero_extend x.frac (prec a) in
-      let yfrac = Bignum.zero_extend y.frac (prec a) in
-      let data = match dif xfrac yfrac x.expn y.expn with
-        | None -> zero (bits_in x.expn)
-        | Some (expn, xfrac) ->
-          let digits = digits_of_precision (radix a) (bits_in expn) (prec a) in
-          let frac,loss = divide (radix a) digits xfrac yfrac in
-          let frac = round rm sign frac loss in
-          let expn = Bignum.(expn - of_int ~width:(bits_in expn) digits) in
-          let expn,frac,loss =
-            align_right_exn ~base:(radix a) ~precision:(prec a) expn frac in
-          let frac = Bignum.extract ~hi:((prec a) - 1) frac in
-          let frac = round rm sign frac loss in
-          norm (radix a)  {frac; expn} in
+       let x = minimize_exponent (radix a) x in
+       let y = minimize_exponent (radix a) y in
+       let sign = xor_sign a.sign b.sign in
+       let xfrac = Bignum.zero_extend x.frac (prec a) in
+       let yfrac = Bignum.zero_extend y.frac (prec a) in
+       let data = match dif xfrac yfrac x.expn y.expn with
+         | None -> zero (bits_in x.expn)
+         | Some (expn, xfrac) ->
+           let digits = digits_of_precision (radix a) (bits_in expn) (prec a) in
+           let frac,loss = divide (radix a) digits xfrac yfrac in
+           let frac = round rm sign frac loss in
+           let expn = Bignum.(expn - of_int ~width:(bits_in expn) digits) in
+           let expn,frac,loss =
+             align_right_exn ~base:(radix a) ~precision:(prec a) expn frac in
+           let frac = Bignum.extract ~hi:((prec a) - 1) frac in
+           let frac = round rm sign frac loss in
+           norm (radix a)  {frac; expn} in
       {a with data = Fin data; sign; }
     | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
     | Nan _, _ -> a
@@ -702,7 +795,7 @@ module Make(Bignum : Bignum) = struct
 
   let truncate ?(rm=Nearest_even) ~upto a = match a.data with
     | Fin {expn; frac} ->
-      begin
+       begin
         match align_right ~base:(radix a) ~precision:upto expn frac with
         | None -> None
         | Some (expn,frac,loss) ->
@@ -715,7 +808,7 @@ module Make(Bignum : Bignum) = struct
       Some a
 
   let truncate_exn ?(rm=Nearest_even) ~upto a =
-    Option.value_exn (truncate ~rm ~upto a)
+      Option.value_exn (truncate ~rm ~upto a)
 
   let sqrt ?(rm=Nearest_even) a =
     match a.data with
@@ -737,10 +830,11 @@ module Make(Bignum : Bignum) = struct
           let a1 = div ~rm s x0 in
           let a2 = add ~rm x0 a1 in
           let x' = div ~rm a2 two in
-          if equal x0 x' then x0
+          if equal x0 x' then x0,n
           else run x' (n + 1)
-        else x0 in
-      truncate_exn (run init 0) ~upto:(prec a)
+        else x0,n in
+      let r,n = run init 0 in
+      truncate_exn r ~upto:(prec a)
     | Inf when is_neg a -> nan ~negative:true a.desc
     | _ -> a
 
