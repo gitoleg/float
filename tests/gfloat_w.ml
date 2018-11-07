@@ -6,17 +6,16 @@ type bignum = word
 
 module Bignum_of_word : Bignum with type t = bignum = struct
 
-  let testbit w i =
-   let x = Word.extract_exn ~hi:i ~lo:i w in
-   Word.is_one x
+  include Word
 
   let zero_extend w width =
     Word.concat (Word.zero width) w
 
-  include Word
 
   let to_string x =
-    Word.string_of_value ~hex:false x
+    sprintf "%s:%d"
+      (Word.string_of_value ~hex:false x)
+      (Word.bitwidth x)
 
   let to_int = to_int_exn
   let extract ?hi ?lo w =

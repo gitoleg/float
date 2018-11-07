@@ -20,7 +20,6 @@ module type Bignum = sig
   val ones : int -> t
   val bitwidth : t -> int
   val extract : ?hi:int -> ?lo:int -> t -> t
-  val testbit : t -> int -> bool
   val zero_extend : t -> int -> t
   val ( + ) : t -> t -> t
   val ( - ) : t -> t -> t
