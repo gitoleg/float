@@ -443,11 +443,11 @@ let is_ok_binop2 op x y =
   let op_real,op_ours = get_binop op in
   let real = op_real x y in
   let ours = base2_binop op_ours x y in
-  if not (equal_base2 real ours) then
-    begin
+  (* if not (equal_base2 real ours) then
+   *   begin *)
       printf "\nreal: %s\nours: %s\n" (sb real) (sb ours);
       printf "\nreal: %g, ours: %g\n" real ours;
-    end;
+    (* end; *)
   equal_base2 real ours
 
 let is_ok_binop10 op x y = true
@@ -589,7 +589,7 @@ let random_float () =
   | _ -> make ()
 
 
-let make_random2 ~times =
+let make_random ~times =
   let binop op (x, x') (y, y') ctxt =
     if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
     else
@@ -619,7 +619,6 @@ let make_random2 ~times =
         let () = binop op x y ctxt in
         sqrt x ctxt in
       (sprintf "random%d" i) >:: f)
-
 
 let suite () =
   let small_x = make_float 0 0 2 in
@@ -735,7 +734,7 @@ let suite () =
     (* test subnormal floats *)
     "small_x + small_y" >:: small_x + small_y;
     "small_x - small_y" >:: small_x - small_y;
-    (* "small * small" >:: small_x * small_y; *)
+    "small_x * small_y" >:: small_x * small_y;
     "small_x / small_y" >:: small_x / small_y;
     "small_y - small_x" >:: small_y - small_x;
     "small_y / small_x" >:: small_y / small_x;
@@ -765,14 +764,18 @@ let suite () =
     "sin 0.000000042"  >:: sin 0.000000042;
 
     (* random - +,-,*,/ with a random operands for radix=2 *)
-  ] @ make_random2 ~times:2
+  ] @ make_random ~times:2
 
-(* sqrt 0,2 *)
-let _suite () =
+let suite () =
+  let y = make_float 0 1022 10000000000000 in
   let x = make_float 0 0 2 in
-  let y = make_float 0 0 3 in
+  let small_x = make_float 0 0 2 in
+  let small_y = make_float 0 0 1 in
+
   "test" >::: [
-      "" >:: sqrt x
+      "" >:: small_y * small_x;
+    (* "1.0 / 1.1"   >:: 1.0 / 1.12345; *)
+      (* "" >:: y / x; *)
     ]
 
 let () = run_test_tt_main (suite ())
