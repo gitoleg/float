@@ -445,11 +445,11 @@ let is_ok_binop2 op x y =
   let op_real,op_ours = get_binop op in
   let real = op_real x y in
   let ours = base2_binop op_ours x y in
-  (* if not (equal_base2 real ours) then
-   *   begin *)
+  if not (equal_base2 real ours) then
+    begin
       printf "\nreal: %s\nours: %s\n" (sb real) (sb ours);
       printf "\nreal: %g, ours: %g\n" real ours;
-    (* end; *)
+    end;
   equal_base2 real ours
 
 let is_ok_binop10 op x y = true
@@ -781,24 +781,16 @@ let test_it () =
   printf "z is %f, real %f\n" (float_of_decimal ours) real
 
 let suite () =
-  let y = make_float 0 2042 10000000000000 in
+  (* let y = make_float 0 2042 10000000000000 in *)
+  let y = make_float 0 1022 10000000000000 in
   let x = make_float 0 0 2 in
 
-  (* let x' = double_of_float x in
-   * let y' = double_of_float y in
-   * let ours = Gfloat_w.Infix.(y' / x') in
-   * let ours = float_of_double ours in
-   *
-   * let real' = ours *. x in
-   * Debug.deconstruct64 real';
-   * printf "\n";
-   * Debug.deconstruct64 y;
-   * printf "real' is %f\n\n\n" real'; *)
-
+  (* let x = make_float 0 0 2 in
+   * let y = make_float 0 0 3 in *)
   "test" >::: [
       (* "1.0 / 1.1"   >:: 1.0 / 1.1; *)
-      (* "aaaaaaaaaa" >:: y / x; *)
-      "bbbbbbbbbb" >:: x / y;
+      "aaaaaaaaaa" >:: y / x;
+      (* "bbbbbbbbbb" >:: x / y; *)
 
     ]
 

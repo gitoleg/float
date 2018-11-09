@@ -726,20 +726,21 @@ module Make(Bignum : Bignum) = struct
 
   let div ?(rm=Nearest_even) a b =
     let extend_expn e = Bignum.sign_extend e (bits_in e) in
+    let min_expn = extend_expn (min_exponent a.desc.ebits) in
+    let max_expn = extend_expn (max_exponent a.desc.ebits) in
     let extend {expn; frac} =
       let expn = extend_expn expn in
       let frac = Bignum.zero_extend frac (bits_in frac) in
       {expn; frac} in
-    let is_overflow frac =
+    let is_overflow expn frac =
       (* it's still a question here, because we can get
          a finite result here. But anyway, if we get it just
          because our maneur with extended representation - let's
          assume we got an Inf  *)
-      match Bignum.lsbn frac with
-      | Some i -> i > a.desc.fbits && not (Bignum.is_zero frac)
-      | None -> false in
-    let min_expn = extend_expn (min_exponent a.desc.ebits) in
-    let max_expn = extend_expn (max_exponent a.desc.ebits) in
+      Bignum.(expn <$ min_expn) &&
+        match Bignum.lsbn frac with
+        | Some i -> i > a.desc.fbits && not (Bignum.is_zero frac)
+        | None -> false in
     check_operands a b;
     match a.data,b.data with
     | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
@@ -751,7 +752,7 @@ module Make(Bignum : Bignum) = struct
        let xexpn, xfrac = safe_align_left a.desc.radix x.expn x.frac in
        let expn = Bignum.(xexpn - y.expn) in
        let frac = Bignum.(xfrac / y.frac) in
-       if Bignum.(expn >$ max_expn) || is_overflow frac then
+       if Bignum.(expn >$ max_expn) || is_overflow expn frac then
          {a with sign; data = Inf}
        else
          let left = Bignum.(xfrac - frac * y.frac) in
@@ -762,21 +763,21 @@ module Make(Bignum : Bignum) = struct
            else if Bignum.(left = y.frac) then ExactlyHalf
            else LessThanHalf in
          let frac = round rm sign frac loss in
-         let expn,frac =
+         let expn,frac,_ =
            if Bignum.(expn <$ min_expn) then
              let dexp = Bignum.(abs expn - abs min_expn) in
              let {expn;frac=frac'}, loss' = unsafe_rshift a.desc.radix {expn;frac} dexp in
-             let frac = round rm sign frac' loss in
+             let frac = round rm sign frac' loss' in
              let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
-             expn,frac
+             expn,frac, combine_loss loss' loss
            else
              let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
-             expn,frac in
+             expn,frac,loss in
          let data =
            match align_right ~base:a.desc.radix ~precision:a.desc.fbits expn frac with
            | None -> zero_finite a.desc
-           | Some (expn,frac,loss) ->
-              let frac = round rm sign frac loss in
+           | Some (expn,frac,loss') ->
+              let frac = round rm sign frac loss' in
               let frac = Bignum.extract ~hi:((prec a) - 1) frac in
               norm (radix a) {frac; expn} in
          {a with data = Fin data; sign; }
