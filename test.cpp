@@ -260,11 +260,15 @@ void mysin(double a) {
 
 
 void test() {
-    mysin(0.5);
-    apf aa(APFloatBase::IEEEdouble(), APInt(64, 8L));
-    apf bb(APFloatBase::IEEEdouble(), APInt(64, 4664551878363631856L));
-    aa.multiply(bb, APFloatBase::rmNearestTiesToAway);
-    std::cout << "llvm res " <<  aa.convertToDouble() << std::endl;
+    apf a(APFloatBase::IEEEquad(), APInt(128, 4602688819172646912L));
+    apf b(APFloatBase::IEEEquad(), APInt(128, 2L));
+    a.divide(b, APFloatBase::rmNearestTiesToEven);
+    std::cout << std::boolalpha << "res " << a.isFiniteNonZero() << std::endl;
+//    std::cout << "res is " << a.convertToDouble() << std::endl;
+
+    // double cc = my_sqrt(bb);
+    // double dd = sqrt(bb);
+    // std::cout << "llvm res " << cc << ", correct is " << dd << std::endl;
     // std::cout << "rmNearestTiesToEven:" << add(3.5, 4.2, APFloatBase::rmNearestTiesToEven) << std::endl
     //           << "rmTowardPositive   :" << add(3.5, 4.2, APFloatBase::rmTowardPositive) << std::endl
     //           << "rmTowardNegative   :" << add(3.5, 4.2, APFloatBase::rmTowardNegative) << std::endl
@@ -291,16 +295,16 @@ void test() {
     // float y = 9111112321833131.0;
 
 
-    double s1 = 0.01;
-    double s2 = 0.0002;
+    // double s1 = 0.01;
+    // double s2 = 0.0002;
 
-    detail::IEEEFloat a(s1);
-    detail::IEEEFloat b(s2);
-    a.subtract(b, APFloatBase::rmNearestTiesToEven);
-    APInt i = a.bitcastToAPInt();
-    std::string s = i.toString(2, false);
-    std::cout << "ideals res " << a.convertToDouble() << std::endl;
-    std::cout << "ideals bits are " << s << std::endl;
+    // detail::IEEEFloat a(s1);
+    // detail::IEEEFloat b(s2);
+    // a.subtract(b, APFloatBase::rmNearestTiesToEven);
+    // APInt i = a.bitcastToAPInt();
+    // std::string s = i.toString(2, false);
+    // std::cout << "ideals res " << a.convertToDouble() << std::endl;
+    // std::cout << "ideals bits are " << s << std::endl;
 
 
     // My x(s1);

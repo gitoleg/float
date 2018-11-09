@@ -1,6 +1,6 @@
 open Core_kernel
 
-let allow_output = ref false
+let allow_output = ref true
 
 let printf fmt =
   let doit str =
@@ -111,6 +111,17 @@ module Make(Bignum : Bignum) = struct
       is_one x
 
     let msb x = testbit x (Bignum.bitwidth x - 1)
+
+    let msbn x =
+      let bits = Bignum.bitwidth x in
+      let inds =
+        List.init bits (fun i -> bits - i - 1) in
+      List.find inds ~f:(testbit x)
+
+    let lsbn x =
+      let bits = Bignum.bitwidth x in
+      let inds = List.init bits ident in
+      List.find inds ~f:(testbit x)
 
     let is_negative = msb
     let is_positive x = not (msb x)
@@ -713,184 +724,62 @@ module Make(Bignum : Bignum) = struct
     | Inf, _ -> a
     | _, Inf -> b
 
-  let divide base digits start_dividend divisor =
-    let set_digit r digit pos = Bignum.(r + lshift_frac base digit pos) in
-    let set_digits digits =
-      let init = Bignum.zero (Bignum.bitwidth divisor) in
-      List.fold digits ~init
-        ~f:(fun data (digit, degree) ->
-          set_digit data digit degree) in
-    let rec loop n acc dividend degree =
-      let dividend, acc =
-        if Bignum.(dividend >= divisor) then
-          let res = Bignum.(dividend / divisor) in
-          let dividend = Bignum.(dividend - res * divisor) in
-          dividend, (res,degree) :: acc
-        else
-          let zero = Bignum.zero (Bignum.bitwidth dividend) in
-          let acc = (zero, degree) :: acc in
-          dividend, acc in
-      let dividend = if dividend < divisor then
-                       lshift_frac base dividend 1
-                     else dividend in
-      if abs degree < digits then
-        loop (n+1) acc dividend (degree - 1)
-      else List.rev acc, dividend, n in
-    let res, left, n = loop 0 [] start_dividend 0 in
-    printf "divisor is %s\n" (bs divisor);
-    printf "left %s\n" (bs left);
-    printf "left %s\n" (sb left);
-    (* List.iter ~f:(fun (b,deg) -> printf "(%s %d)" (bs b) deg) res;
-     * printf "\n"; *)
-
-    let res = List.map res ~f:(fun (d, deg) -> d, deg + digits) in
-    let res = set_digits res in
-    let loss =
-      if Bignum.is_zero left then ExactlyZero
-      else if Bignum.(left > divisor) then MoreThanHalf
-      else if Bignum.(left = divisor) then ExactlyHalf
-      else LessThanHalf in
-    res, loss
-
-  (* returns a maximum possible exponent for [precision], i.e.
-     how many digits could fit in [precision] bits *)
-  let digits_of_precision base exp_bits precision =
-    let expn, frac =
-      safe_align_left base (Bignum.zero exp_bits) (Bignum.one precision) in
-    Bignum.abs expn |> Bignum.to_int
-
-  let expn_dif x y =
-    let is_pos = Bignum.is_positive in
-    let is_neg = Bignum.is_negative in
-    let e = Bignum.(x - y) in
-    if is_neg x && is_pos y && Bignum.(e >$ x) then `Underflow_expn
-    else
-      if is_pos x && is_neg y && Bignum.(e <$ x) then `Underflow_expn
-      else `Nice e
-
-  (* TODO: still wip *)
-  let expn_dif' x y =
-    let is_pos = Bignum.is_positive in
-    let is_neg = Bignum.is_negative in
-    let both f = f x && f y in
-    let e =
-      if both is_pos then
-        Bignum.(x - y)
-      else if both is_neg then
-        Bignum.(abs x - abs y)
-      else
-        Bignum.(abs x + abs y) in
-    printf "e %s, abs %s\n" (bs e) (bs (Bignum.abs e));
-    if Bignum.(e > max_exponent (bitwidth x)) then `Underflow_expn
-    else `Nice e
-
   let div ?(rm=Nearest_even) a b =
-    let rec dif xfrac yfrac xexpn yexpn =
-      match expn_dif xexpn yexpn with
-      | `Underflow_expn -> None
-      | `Nice expn when Bignum.(xfrac >= yfrac) -> Some (expn, xfrac)
-      | `Nice expn ->
-         let xfrac = lshift_frac (radix a) xfrac 1 in
-         let one = Bignum.one (bits_in expn) in
-         dif xfrac yfrac expn one in
-    (* let dif' xfrac yfrac xexpn yexpn =
-     *   let extend exp = Bignum.sign_extend exp a.desc.ebits in
-     *   let xexpn = extend xexpn in
-     *   let yexpn = extend yexpn in
-     *   let min_expn = extend (min_exponent a.desc.ebits) in
-     *   let expn = Bignum.(xexpn - yexpn) in
-     *   if Bignum.(expn >$ min_expn) then `Nice expn
-     *   else
-     *     let dexp = Bignum.(abs (abs xexpn - abs yexpn)) in
-     *     let {expn;frac=frac'}, loss' = unsafe_rshift a.desc.radix {xexpn;xfrac} dexp in *)
-        check_operands a b;
+    let extend_expn e = Bignum.sign_extend e (bits_in e) in
+    let extend {expn; frac} =
+      let expn = extend_expn expn in
+      let frac = Bignum.zero_extend frac (bits_in frac) in
+      {expn; frac} in
+    let is_overflow frac =
+      (* it's still a question here, because we can get
+         a finite result here. But anyway, if we get it just
+         because our maneur with extended representation - let's
+         assume we got an Inf  *)
+      match Bignum.lsbn frac with
+      | Some i -> i > a.desc.fbits && not (Bignum.is_zero frac)
+      | None -> false in
+    let min_expn = extend_expn (min_exponent a.desc.ebits) in
+    let max_expn = extend_expn (max_exponent a.desc.ebits) in
+    check_operands a b;
     match a.data,b.data with
     | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
     | Fin x, Fin y when is_zero b -> {a with data = Inf}
     | Fin x, Fin y ->
-       printf "\n\n\n\ninput x: %s, y %s\n" (tos x) (tos y);
-       let x = minimize_exponent (radix a) x in
-       let y = minimize_exponent (radix a) y in
-       printf "minim x: %s, y %s\n" (tos x) (tos y);
-
+       let x = extend x in
+       let y = extend y in
        let sign = xor_sign a.sign b.sign in
-       let xfrac = Bignum.zero_extend x.frac (prec a) in
-       let yfrac = Bignum.zero_extend y.frac (prec a) in
-
-       let origin expn xfrac =
-         let digits = digits_of_precision (radix a) (bits_in expn) (prec a) in
-         let frac,loss = divide (radix a) digits xfrac yfrac in
-         let expn = Bignum.(expn - of_int ~width:(bits_in expn) digits) in
-         printf "origin result: %s, frac %s\n" (bs expn) (bs frac);
-         expn, round rm sign frac loss in
-
-       let mydiv1 expn_dif =
-         let zero = Bignum.zero a.desc.ebits in
-         let dexpn,xfrac = safe_align_left a.desc.radix zero xfrac in
-         printf "xfrac %s\n" (bs xfrac);
-         let frac = Bignum.(xfrac / yfrac) in
-         printf "dexpn is %s\n" (expn_to_str dexpn);
-         printf "my frac %s\n" (bs frac);
-         printf "my frac %s\n" (sb frac);
-         let left = Bignum.(xfrac - frac * yfrac) in
-         printf "left %s\n" (bs left);
-         printf "left %s\n" (sb left);
+       let xexpn, xfrac = safe_align_left a.desc.radix x.expn x.frac in
+       let expn = Bignum.(xexpn - y.expn) in
+       let frac = Bignum.(xfrac / y.frac) in
+       if Bignum.(expn >$ max_expn) || is_overflow frac then
+         {a with sign; data = Inf}
+       else
+         let left = Bignum.(xfrac - frac * y.frac) in
+         let left = Bignum.(left lsl 1) in
          let loss =
            if Bignum.is_zero left then ExactlyZero
-           else if Bignum.(left > yfrac) then MoreThanHalf
-           else if Bignum.(left = yfrac) then ExactlyHalf
+           else if Bignum.(left > y.frac) then MoreThanHalf
+           else if Bignum.(left = y.frac) then ExactlyHalf
            else LessThanHalf in
-         printf "loss1 is %s\n" (string_of_loss loss);
-         (* let frac = Bignum.(frac / of_int ~width:(bits_in frac) 2) in *)
-         (* let dexpn = Bignum.(dexpn + one (bits_in dexpn)) in *)
          let frac = round rm sign frac loss in
-         let expn = Bignum.(expn_dif + dexpn) in
-         expn,frac in
-
-       (* we need to extend exponent as well ? *)
-       let mydiv2 _ =
-         let xexpn = Bignum.sign_extend x.expn (bits_in x.expn) in
-         let yexpn = Bignum.sign_extend y.expn (bits_in y.expn) in
-         let xexpn,xfrac = safe_align_left a.desc.radix xexpn xfrac in
-         let expn = Bignum.(xexpn - yexpn) in
-         printf "->xfrac %s\n" (bs xfrac);
-         let frac = Bignum.(xfrac / yfrac) in
-         printf "expn is %s\n" (expn_to_str expn);
-         printf "my frac %s\n" (bs frac);
-         printf "my frac %s\n" (sb frac);
-         let left = Bignum.(xfrac - frac * yfrac) in
-         printf "left %s\n" (bs left);
-         printf "left %s\n" (sb left);
-         let loss =
-           let left = Bignum.(left lsl 1) in
-           if Bignum.is_zero left then ExactlyZero
-           else if Bignum.(left > yfrac) then MoreThanHalf
-           else if Bignum.(left = yfrac) then ExactlyHalf
-           else LessThanHalf in
-         printf "loss1 is %s\n" (string_of_loss loss);
-         (* let frac = Bignum.(frac / of_int ~width:(bits_in frac) 2) in *)
-         (* let dexpn = Bignum.(dexpn + one (bits_in dexpn)) in *)
-         let frac = round rm sign frac loss in
-         let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
-         expn, frac in
-
-
-       let data = match dif xfrac yfrac x.expn y.expn with
-         | None -> zero_finite a.desc
-         | Some (expn, xfrac) ->
-            let expn,frac = origin expn xfrac in
-            printf "\n\n";
-            let expn,frac = mydiv2 () in
-
-            printf "before shift: expn is %s, frac %s\n" (bs expn) (bs frac);
-            match align_right ~base:a.desc.radix ~precision:a.desc.fbits expn frac with
-            | None -> zero_finite a.desc
-            | Some (expn,frac,loss) ->
-               printf "expn is %s, loss %s\n" (bs expn) (string_of_loss loss);
-               let frac = round rm sign frac loss in
-               let frac = Bignum.extract ~hi:((prec a) - 1) frac in
-               norm (radix a) {frac; expn} in
-       {a with data = Fin data; sign; }
+         let expn,frac =
+           if Bignum.(expn <$ min_expn) then
+             let dexp = Bignum.(abs expn - abs min_expn) in
+             let {expn;frac=frac'}, loss' = unsafe_rshift a.desc.radix {expn;frac} dexp in
+             let frac = round rm sign frac' loss in
+             let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
+             expn,frac
+           else
+             let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
+             expn,frac in
+         let data =
+           match align_right ~base:a.desc.radix ~precision:a.desc.fbits expn frac with
+           | None -> zero_finite a.desc
+           | Some (expn,frac,loss) ->
+              let frac = round rm sign frac loss in
+              let frac = Bignum.extract ~hi:((prec a) - 1) frac in
+              norm (radix a) {frac; expn} in
+         {a with data = Fin data; sign; }
     | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
     | Nan _, _ -> a
     | _, Nan _ -> b

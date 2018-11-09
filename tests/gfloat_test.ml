@@ -98,6 +98,7 @@ let drop_hd w =
 let int64_of_bits is_neg expn frac =
   let signb = if is_neg then Int64.(one lsl 63) else Int64.zero in
   let expn = Int64.(expn lsl 52) in
+  let expn = Int64.((expn lsl 1) lsr 1) in
   Int64.(signb lor expn lor frac)
 
 let float_of_double t =
@@ -396,7 +397,7 @@ module Debug = struct
     let b_len = Seq.length bits in
     let w_len = Word.bitwidth w in
     if b_len > w_len then
-      Seq.drop bits (b_len - w_len)
+     Seq.drop bits (b_len - w_len)
     else bits
 
   let string_of_bits w =
@@ -427,7 +428,8 @@ module Debug = struct
     let bias = Word.of_int ~width:11 1023 in
     let expn = Word.(signed (expn - bias)) in
     let frac = Word.extract_exn ~hi:51 w in
-    printf "ocaml %f: unbiased expn %d, frac %s, ( %d)\n"
+    printf "ocaml %f: bits %s\n" x (string_of_bits64 x);
+    printf "ocaml %f: unbiased expn %d, frac %s (%d)\n"
       x (wi expn) (string_of_bits frac) (wi frac)
 end
 
@@ -556,6 +558,9 @@ let make_int64 sign_bit expn frac =
 
 let make_float sign expn frac =
   let x = make_int64 sign expn frac in
+
+  printf "make_float: %d %d ---> %Ld\n" expn frac x;
+
   Int64.float_of_bits x
 
 let random_int ~from ~to_ =
@@ -766,16 +771,35 @@ let suite () =
     (* random - +,-,*,/ with a random operands for radix=2 *)
   ] @ make_random ~times:2
 
+let test_it () =
+  let a = 3.456 in
+  let b = 13.1986 in
+  let real = a /. b in
+  let x = decimal_of_float a in
+  let y = decimal_of_float b in
+  let ours = Gfloat_w.div x y in
+  printf "z is %f, real %f\n" (float_of_decimal ours) real
+
 let suite () =
-  let y = make_float 0 1022 10000000000000 in
+  let y = make_float 0 2042 10000000000000 in
   let x = make_float 0 0 2 in
-  let small_x = make_float 0 0 2 in
-  let small_y = make_float 0 0 1 in
+
+  (* let x' = double_of_float x in
+   * let y' = double_of_float y in
+   * let ours = Gfloat_w.Infix.(y' / x') in
+   * let ours = float_of_double ours in
+   *
+   * let real' = ours *. x in
+   * Debug.deconstruct64 real';
+   * printf "\n";
+   * Debug.deconstruct64 y;
+   * printf "real' is %f\n\n\n" real'; *)
 
   "test" >::: [
-      "" >:: small_y * small_x;
-    (* "1.0 / 1.1"   >:: 1.0 / 1.12345; *)
-      (* "" >:: y / x; *)
+      (* "1.0 / 1.1"   >:: 1.0 / 1.1; *)
+      (* "aaaaaaaaaa" >:: y / x; *)
+      "bbbbbbbbbb" >:: x / y;
+
     ]
 
 let () = run_test_tt_main (suite ())
