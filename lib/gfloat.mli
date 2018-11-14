@@ -30,7 +30,7 @@ module type Bignum = sig
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
   val lnot : t -> t
-
+  val neg : t -> t
   val to_string : t -> string
   val tow : t -> Bap.Std.word
 end

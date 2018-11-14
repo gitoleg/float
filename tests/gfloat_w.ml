@@ -11,7 +11,6 @@ module Bignum_of_word : Bignum with type t = bignum = struct
   let zero_extend w width =
     Word.concat (Word.zero width) w
 
-
   let to_string x =
     sprintf "%s:%d"
       (Word.string_of_value ~hex:false x)

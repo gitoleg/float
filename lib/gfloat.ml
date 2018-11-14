@@ -1,6 +1,6 @@
 open Core_kernel
 
-let allow_output = ref true
+let allow_output = ref false
 
 let printf fmt =
   let doit str =
@@ -91,6 +91,7 @@ module type Bignum = sig
   val ( lsl ) : t -> int -> t
   val ( lxor ) : t -> t -> t
   val lnot : t -> t
+  val neg : t -> t
   val to_string : t -> string             (* TODO: TEMP!  *)
   val tow : t -> Bap.Std.word
 end
@@ -190,6 +191,8 @@ module Make(Bignum : Bignum) = struct
       data : data;
     }
 
+  let bits_in = Bignum.bitwidth
+
   (* TODO: remove it later *)
   let sb x = Debug.string_of_bits (Bignum.tow x)
 
@@ -201,7 +204,7 @@ module Make(Bignum : Bignum) = struct
 
   (* TODO: remove it later *)
   let tos {expn;frac} =
-    sprintf "(%s %s)" (expn_to_str expn) (bs frac)
+    sprintf "(%s:%d %s)" (expn_to_str expn) (bits_in expn) (bs frac)
 
   (* TODO: remove it later *)
   let tos' x = match x.data with
@@ -214,8 +217,6 @@ module Make(Bignum : Bignum) = struct
        sprintf "(%s %s)\n" (expn_to_str x.expn)
          (sb x.frac)
     | _ -> "not a finite number"
-
-  let bits_in = Bignum.bitwidth
 
   let msb w =
     let len = bits_in w in
@@ -321,6 +322,21 @@ module Make(Bignum : Bignum) = struct
     let frac, loss = rshift_frac base x.frac n' in
     let expn = Bignum.(x.expn + n) in
     { expn; frac }, loss
+
+  (* shift frac left as possible, without bit loss,
+     returns frac and number of shifts *)
+  let align_frac_left base frac =
+    let prec = bits_in frac in
+    let rec loop n frac =
+      let frac' = Bignum.(frac lsl 1) in
+      match msb frac with
+      | None -> n, frac
+      | Some i when i >= prec -> n, frac
+      | Some _ -> loop (n + 1) (lshift_frac base frac' 1) in
+    let frac = Bignum.zero_extend frac prec in
+    let n, frac = loop 0 frac in
+    Bignum.extract ~hi:(prec - 1) frac, n
+
 
   (* [align_right base precision expn frac] shifts fraction right to fit
      into [precision] with a possible loss of bits in order to keep
@@ -732,15 +748,15 @@ module Make(Bignum : Bignum) = struct
       let expn = extend_expn expn in
       let frac = Bignum.zero_extend frac (bits_in frac) in
       {expn; frac} in
-    let is_overflow expn frac =
+    let is_overflow expn frac = false in
       (* it's still a question here, because we can get
          a finite result here. But anyway, if we get it just
          because our maneur with extended representation - let's
          assume we got an Inf  *)
-      Bignum.(expn <$ min_expn) &&
-        match Bignum.lsbn frac with
-        | Some i -> i > a.desc.fbits && not (Bignum.is_zero frac)
-        | None -> false in
+      (* Bignum.(expn <$ min_expn) &&
+       *   match Bignum.lsbn frac with
+       *   | Some i -> i > a.desc.fbits && not (Bignum.is_zero frac)
+       *   | None -> false in *)
     check_operands a b;
     match a.data,b.data with
     | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
@@ -797,7 +813,7 @@ module Make(Bignum : Bignum) = struct
             let frac = round rm a.sign frac loss in
             let frac = Bignum.extract ~hi:(upto - 1) frac in
             let data = Fin { expn; frac} in
-            Some { a with data }
+            Some { a with data } (* TODO change description? *)
        end
     | _ ->
        Some a
@@ -805,41 +821,29 @@ module Make(Bignum : Bignum) = struct
   let truncate_exn ?(rm=Nearest_even) ~upto a =
     Option.value_exn (truncate ~rm ~upto a)
 
+  (* Newton-Raphson algorithm. Need a good choice of a starting seed  *)
   let sqrt ?(rm=Nearest_even) a =
     match a.data with
     | Fin x when is_neg a -> nan ~negative:true a.desc
     | Fin x when is_zero a -> a
     | Fin x ->
-       let x = minimize_exponent (radix a) x in
-
        let expn = Bignum.sign_extend x.expn (bits_in x.expn) in
        let frac = Bignum.zero_extend x.frac (prec a) in
+       let {expn;frac} = minimize_exponent (radix a) {expn; frac} in
        let desc = {a.desc with ebits = 2 * a.desc.ebits; fbits = 2 * (prec a) } in
        let s = create desc ~expn frac in
        let two = create desc
                    ~expn:(Bignum.of_int ~width:desc.ebits 0)
                    (Bignum.of_int ~width:desc.fbits 2) in
-       let init = div ~rm s two in
-
-       let () = printf "\n%s / %s = %s \n" (tos' s) (tos' two) (tos' init) in
-
-       let max = prec a in
-
        let rec run x0 n =
-         if n < max then
-           let a1 = div ~rm s x0 in
-
-           (* let () = printf "\n%s / %s = \n" (tos'' s) (tos'' x0) in
-            * let () = printf "a1 %s\n" (tos'' a1) in
-            * x0,n  (* TMP *) *)
-
-           let a2 = add ~rm x0 a1 in
-           let () = printf "a2 %s\n" (tos' a2) in
-           let x' = div ~rm a2 two in
-           let () = printf "x' %s\n" (tos' x') in
-           if equal x0 x' then x0,n
-           else run x' (n + 1)
-         else x0,n in
+         let a1 = div ~rm s x0 in
+         let a2 = add ~rm x0 a1 in
+         let x' = div ~rm a2 two in
+         if equal x0 x' || not (is_fin x') then
+           x0,n
+         else
+           run x' (n + 1) in
+       let init = div ~rm s two in
        let r,n = run init 0 in
        truncate_exn r ~upto:(prec a)
     | Inf when is_neg a -> nan ~negative:true a.desc

@@ -6,6 +6,7 @@ open Gfloat_w
 
 let allow_output = true
 
+
 let printf fmt =
   let doit str =
     if allow_output then
@@ -26,25 +27,26 @@ let double_ebits = 11
 let double_fbits = 52
 let double_bias = 1023
 
+let double_desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1)
+
 let inf_bits = Int64.bits_of_float Caml.infinity
 let ninf_bits = Int64.bits_of_float Caml.neg_infinity
 let nan_bits = Int64.bits_of_float Caml.nan
 
 let double_of_float x =
-  let desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1) in
   let negative = x < 0.0 in
   let create ~expn frac =
-    create desc ~negative ~expn frac in
+    create double_desc ~negative ~expn frac in
   let bits = Int64.bits_of_float x in
-  if Int64.(bits = inf_bits) then inf desc
-  else if Int64.(bits = ninf_bits) then inf desc ~negative:true
-  else if Int64.(bits = nan_bits) then nan desc
+  if Int64.(bits = inf_bits) then inf double_desc
+  else if Int64.(bits = ninf_bits) then inf double_desc ~negative:true
+  else if Int64.(bits = nan_bits) then nan double_desc
   else
     let bits = Word.of_int64 bits in
     let expn = Word.to_int_exn (Word.extract_exn ~hi:62 ~lo:52 bits) in
     let frac = Word.extract_exn ~hi:51 bits in
     let expn' = expn - double_bias in
-    if Int.(expn = 0) && Word.is_zero frac then zero desc
+    if Int.(expn = 0) && Word.is_zero frac then zero double_desc
     else
       let is_subnormal = Int.(expn = 0) in
       let dexp = if expn = 0 then 0 else 52 in
@@ -426,11 +428,11 @@ module Debug = struct
     let w = Word.of_int64 y in
     let expn = Word.extract_exn ~hi:62 ~lo:52 w in
     let bias = Word.of_int ~width:11 1023 in
-    let expn = Word.(signed (expn - bias)) in
+    let expn' = Word.(signed (expn - bias)) in
     let frac = Word.extract_exn ~hi:51 w in
     printf "ocaml %f: bits %s\n" x (string_of_bits64 x);
-    printf "ocaml %f: unbiased expn %d, frac %s (%d)\n"
-      x (wi expn) (string_of_bits frac) (wi frac)
+    printf "ocaml %f: biased/unbiased expn %d/%d, frac %s (%d)\n"
+      x (wi expn) (wi expn') (string_of_bits frac) (wi frac)
 end
 
 let sb = Debug.string_of_bits64
@@ -558,10 +560,11 @@ let make_int64 sign_bit expn frac =
 
 let make_float sign expn frac =
   let x = make_int64 sign expn frac in
+  let r = Int64.float_of_bits x in
+  printf "make_float: %d %d ---> %Ld (%s)\n" expn frac x
+    (Debug.string_of_bits64 r);
+  r
 
-  printf "make_float: %d %d ---> %Ld\n" expn frac x;
-
-  Int64.float_of_bits x
 
 let random_int ~from ~to_ =
   let open Caml in
@@ -780,18 +783,35 @@ let test_it () =
   let ours = Gfloat_w.div x y in
   printf "z is %f, real %f\n" (float_of_decimal ours) real
 
-let suite () =
-  (* let y = make_float 0 2042 10000000000000 in *)
-  let y = make_float 0 1022 10000000000000 in
-  let x = make_float 0 0 2 in
+let sqrt_model x =
+  let max = 52 in
+  let y = x *. 10000000000.0 in
+  let rec loop n y0 =
+    if n < max then
+      loop Caml.(n + 1) ((y0 +. y /. y0) /. 2.0)
+      (* let a1 = y /. y0 in
+       * let a2 = y0 +. a1 in
+       * let y' = a2 /. 2.0 in
+       * loop Caml.(n + 1) y' *)
+    else y0 in
+  let r = loop 0 (y /. 2.0) in
+  let r = r /. 100000.0 in
+  printf "model %g -> %g\n" x r
 
-  (* let x = make_float 0 0 2 in
+let _suite () =
+  (* let y = make_float 0 2042 10000000000000 in *)
+  (* let y = make_float 0 1022 10000000000000 in
+   * let x = make_float 0 0 2 in *)
+
+  let x = make_float 0 0 2 in
+  printf "input x is %g\n" x;
+
+ (* let x = make_float 0 0 2 in
    * let y = make_float 0 0 3 in *)
   "test" >::: [
-      (* "1.0 / 1.1"   >:: 1.0 / 1.1; *)
-      "aaaaaaaaaa" >:: y / x;
-      (* "bbbbbbbbbb" >:: x / y; *)
-
+      (* "1.0 / 1.1"   >:: 1.0 / 1.1;
+       * "aaaaaaaaaa" >:: y/ x; *)
+      "bbbbbbbbbb" >:: sqrt x;
     ]
 
 let () = run_test_tt_main (suite ())
