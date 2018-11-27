@@ -27,7 +27,7 @@ let double_ebits = 11
 let double_fbits = 52
 let double_bias = 1023
 
-let double_desc = desc ~radix:2 ~expn_bits:double_ebits (double_fbits + 1)
+let double_desc = desc ~expn_bits:double_ebits (double_fbits + 1)
 
 let inf_bits = Int64.bits_of_float Caml.infinity
 let ninf_bits = Int64.bits_of_float Caml.neg_infinity
@@ -138,10 +138,6 @@ let truncate_zeros x =
   | None -> x
   | Some p -> String.rstrip ~drop:(fun c -> Char.equal c '0') x
 
-let decimal_precision = 50
-let decimal_expn_bits = 10
-let decimal_desc = desc ~radix:10 ~expn_bits:decimal_expn_bits decimal_precision
-
 let log2 x = Float.log10 x /. Float.log10 2.0
 let pow2 x = int_of_float (2.0 ** float_of_int x)
 
@@ -166,19 +162,6 @@ let actual_bits x =
   else min_bits (Z.of_string x)
 
 exception Not_created of string
-
-let check_int_part str =
-  let max_digits = digits_of_bits decimal_precision in
-  if (String.length str > max_digits) then
-    let err = sprintf "cat'n represent %s in %d bits" str
-        decimal_precision in
-    raise (Not_created err)
-
-let rec adjust_base10 x expn bits =
-  if min_bits x <= bits then x,expn
-  else
-    let ten = Z.of_int 10 in
-    adjust_base10 Z.(x / ten) (expn + 1) bits
 
 let insert_point str expn =
   let insert str before =
@@ -207,51 +190,6 @@ let insert_point str expn =
     let str = str ^ zeros in
     insert str (len + expn)
 
-let truncate str =
-  let x = truncate_zeros str in
-  let is_neg = List.hd_exn (String.to_list x) = '-' in
-  let start, point =
-    let p = String.index_exn x '.' in
-    if is_neg then 1, p
-    else 0, p in
-  let base = String.subo ~pos:start ~len:(point - start) x in
-  let remd = String.subo ~pos:(point + 1) x in
-  let expn = - (String.length remd) in
-  check_int_part base;
-  let bits = actual_bits (base ^ remd) in
-  if bits = 0 then is_neg, str, expn
-  else
-    let frac = Z.of_string (base ^ remd) in
-    let frac,expn = adjust_base10 frac expn decimal_precision in
-    let frac = Z.extract frac 0 decimal_precision in
-    is_neg, Z.to_string frac, expn
-
-let create_decimal negative ~expn frac =
-  create decimal_desc ~negative ~expn frac
-
-let decimal_of_string = function
-  | "nan" -> nan decimal_desc
-  | "inf" -> inf decimal_desc
-  | "-inf" -> inf ~negative:true decimal_desc
-  | str ->
-    let negative, frac, expn = truncate str in
-    if is_zero_float frac then
-      let expn = Word.zero decimal_expn_bits in
-      let frac = Word.zero decimal_precision in
-      create_decimal negative ~expn frac
-    else
-      let frac = Word.of_int64 ~width:decimal_precision
-                   (Int64.of_string frac) in
-      let expn = Word.of_int ~width:decimal_expn_bits expn in
-      create_decimal negative ~expn frac
-
-let truncate_float f =
-  let is_neg, x,e = truncate (str_of_float f) in
-  let x = float_of_string (insert_point x e) in
-  if is_neg then ~-. x
-  else x
-
-let decimal_of_float x = decimal_of_string (str_of_float x)
 let attach_sign x t = if is_neg t then ~-. x else x
 
 let string_of_decimal t =
@@ -332,35 +270,6 @@ let base2_unop = gen_unop double_of_float float_of_double
 let nan = Float.nan
 let inf = Float.infinity
 let ninf = Float.neg_infinity
-
-let string_equal1 real ours =
-  let real = truncate_zeros (string_of_float real) in
-  String.equal real (truncate_zeros ours)
-
-let string_equal2 real ours =
-  let ours = truncate_zeros ours in
-  let len = String.length ours in
-  let f x =
-    match String.index x '.' with
-    | None -> x
-    | Some i when i < len - 2 ->
-      String.subo ~len:(len - 1) x
-    | _ -> String.subo ~len:len  x in
-  String.equal (f real) (f ours)
-
-let string_equal3 real ours =
-  let real_plus = real +. Float.epsilon_float |> str_of_float in
-  let real_mins = real -. Float.epsilon_float |> str_of_float in
-  string_equal2 real_plus ours ||
-  string_equal2 real_mins ours
-
-let equal_base10 real ours =
-  string_equal1 real ours ||
-  string_equal2 (str_of_float real) ours ||
-  string_equal3 real ours
-
-let base10_binop = gen_binop decimal_of_float string_of_decimal
-let base10_unop = gen_unop decimal_of_float string_of_decimal
 
 type binop = [ `Add | `Sub | `Mul | `Div ]
 type unop = [ `Sqrt ]
@@ -454,30 +363,16 @@ let is_ok_binop2 op x y =
     end;
   equal_base2 real ours
 
-let is_ok_binop10 op x y = true
-  (* let op_real,op_ours = get_binop op in
-   * let x = truncate_float x in
-   * let y = truncate_float y in
-   * let real = op_real x y in
-   * let ours = base10_binop op_ours x y in
-   * equal_base10 real ours *)
-
 let binop op x y ctxt =
   let op_str = string_of_binop op x y in
-  let () =
-    if not (is_ok_binop2 op x y) then
-      let error = sprintf "%s failed for radix 2" op_str in
-      assert_bool error false in
-  if not (is_ok_binop10 op x y) then
-    let error = sprintf "%s failed for radix 10" op_str in
+  if not (is_ok_binop2 op x y) then
+    let error = sprintf "%s failed for radix 2" op_str in
     assert_bool error false
 
 let binop_special op op' x y ctxt =
   let real = str_of_float (op x y) in
   let ours = str_of_float (base2_binop op' x y) in
-  assert_equal ~ctxt ~cmp:String.equal real ours;
-  let r10 = base10_binop op' x y in
-  assert_equal ~ctxt ~cmp:String.equal real r10
+  assert_equal ~ctxt ~cmp:String.equal real ours
 
 let is_ok_unop2 op x =
   let op_real, op_ours = get_unop op in
@@ -490,40 +385,23 @@ let is_ok_unop2 op x =
     end;
   equal_base2 real ours
 
-let is_ok_unop10 op x = true
-  (* let x = truncate_float x in
-   * let op_real, op_ours = get_unop op in
-   * let real = op_real x in
-   * let ours = base10_unop op_ours x in
-   * equal_base10 real ours *)
-
 let unop op x ctxt =
   let op_str = string_of_unop op x in
-  let () =
-    if not (is_ok_unop2 op x) then
-      let error = sprintf "%s failed for radix 2" op_str in
-      assert_bool error false in
-  if not (is_ok_unop10 op x) then
-    let error = sprintf "%s failed for radix 10" op_str in
+  if not (is_ok_unop2 op x) then
+    let error = sprintf "%s failed for radix 2" op_str in
     assert_bool error false
 
 let sin2  = gen_sin double_of_float float_of_double ~prec:53
-let sin10 = gen_sin decimal_of_float string_of_decimal ~prec:decimal_precision
 
 let sin x ctxt =
   let real = Pervasives.sin x in
   let r2 = sin2 x in
   assert_equal ~ctxt ~cmp:equal_base2 real r2
-  (* let r10 = sin10 x in
-   * let equal = equal_base10 real r10 in
-   * assert_bool "sin base 10 failed" equal *)
 
 let unop_special op op' x ctxt =
   let real = str_of_float (op x) in
   let r2 = str_of_float @@ base2_unop op' x in
-  assert_equal ~ctxt ~cmp:String.equal real r2;
-  let r10 = base10_unop op' x in
-  assert_equal ~ctxt ~cmp:String.equal real r10
+  assert_equal ~ctxt ~cmp:String.equal real r2
 
 let add_special x y ctxt = binop_special (+.) add x y ctxt
 let sub_special x y ctxt = binop_special (-.) sub x y ctxt
@@ -561,8 +439,8 @@ let make_int64 sign_bit expn frac =
 let make_float sign expn frac =
   let x = make_int64 sign expn frac in
   let r = Int64.float_of_bits x in
-  printf "make_float: %d %d ---> %Ld (%s)\n" expn frac x
-    (Debug.string_of_bits64 r);
+  (* printf "make_float: %d %d ---> %Ld (%s)\n" expn frac x
+   *   (Debug.string_of_bits64 r); *)
   r
 
 
@@ -773,15 +651,6 @@ let suite () =
 
     (* random - +,-,*,/ with a random operands for radix=2 *)
   ] @ make_random ~times:2
-
-let test_it () =
-  let a = 3.456 in
-  let b = 13.1986 in
-  let real = a /. b in
-  let x = decimal_of_float a in
-  let y = decimal_of_float b in
-  let ours = Gfloat_w.div x y in
-  printf "z is %f, real %f\n" (float_of_decimal ours) real
 
 let sqrt_model x =
   let max = 52 in

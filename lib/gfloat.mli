@@ -10,8 +10,8 @@ type rounding =
 (** gfloat descriptor *)
 type desc
 
-(** [desc : ~radix ~expn_bits fraction_bits] *)
-val desc : radix:int -> expn_bits:int -> int -> desc
+(** [desc : ~expn_bits fraction_bits] *)
+val desc : expn_bits:int -> int -> desc
 
 module type Bignum = sig
   type t
@@ -39,19 +39,19 @@ module Make(B : Bignum) : sig
 
   type t
 
-  (** [create ~radix expn frac] creates gfloat from radix, signed expn
+  (** [create desc expn frac] creates gfloat from desc, signed expn
       and fraction.  *)
   val create : desc -> ?negative:bool -> expn:B.t -> B.t -> t
 
-  (** [zero ~radix expn_bits prec] creates gfloat equaled to zero from
+  (** [zero desc expn_bits prec] creates gfloat equaled to zero from
       radix, exponent bits and precision *)
   val zero : desc -> t
 
-  (** [inf ~radix prec] creates positive or negative infinity from radix
+  (** [inf desc prec] creates positive or negative infinity from desc
       and precision *)
   val inf : ?negative:bool -> desc -> t
 
-  (** [nan ~radix prec] creates nan from radix and precision. *)
+  (** [nan desc prec] creates nan from desc and precision. *)
   val nan : ?signaling:bool -> ?negative:bool -> ?payload:B.t -> desc -> t
 
   (** [is_fin x] returns true if [x] is finite number, i.e. neither nan
