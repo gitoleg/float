@@ -1,117 +1,62 @@
+open Core_float.Types
 
-type rounding =
-  | Nearest_even  (** round to nearest, ties to even *)
-  | Nearest_away  (** round to nearest, ties to away *)
-  | Towards_zero  (** round toward zero              *)
-  | Positive_inf  (** round toward positive infinity *)
-  | Negative_inf  (** round toward negative infinity *)
-[@@deriving sexp]
+type rmode
 
-(** gfloat descriptor *)
-type desc
 
-(** [desc : ~radix ~expn_bits fraction_bits] *)
-val desc : radix:int -> expn_bits:int -> int -> desc
+module Make(B : Core_float.Core) : sig
+  type 'a t = 'a knowledge
 
-module type Bignum = sig
-  type t
-  val of_int : width:int -> int -> t
-  val to_int : t -> int
-  val ones : int -> t
-  val bitwidth : t -> int
-  val extract : ?hi:int -> ?lo:int -> t -> t
-  val zero_extend : t -> int -> t
-  val ( + ) : t -> t -> t
-  val ( - ) : t -> t -> t
-  val ( * ) : t -> t -> t
-  val ( / ) : t -> t -> t
-  val ( = ) : t -> t -> bool
-  val ( < ) : t -> t -> bool
-  val ( lsl ) : t -> int -> t
-  val ( lxor ) : t -> t -> t
-  val lnot : t -> t
-  val neg : t -> t
-  val to_string : t -> string
-  val tow : t -> Bap.Std.word
+  type 'a number = 'a bitv value knowledge
+  type nonrec bit = bit value knowledge
+
+  type ('a, 'b) desc
+  type ('a, 'b) float
+
+  val rne : rmode (** round to nearest, ties to even *)
+  val rna : rmode (** round to nearest, ties to away *)
+  val rtp : rmode (** round toward positive infinity *)
+  val rtn : rmode (** round toward negative infinity *)
+  val rtz : rmode (** round toward zero              *)
+
+  val finite : ('e,'k) desc -> bit -> 'e number -> 'k number -> ('e, 'k) float
+
+  val pinf : ('e,'k) desc -> ('e,'k) float
+  val ninf : ('e,'k) desc -> ('e,'k) float
+  val snan : ('e,'k) desc -> 'k bitv value t -> ('e,'k) float
+  val qnan : ('e,'k) desc -> 'k bitv value t -> ('e,'k) float
+
+  val exponent    : ('e,'k) float -> 'e bitv value t
+  val coefficient : ('e,'k) float -> 'k bitv value t
+  val fsign       : ('e,'k) float -> bit
+
+  val is_finite : ('e,'k) float -> bit
+  val is_fzero  : ('e,'k) float -> bit
+  val is_pinf   : ('e,'k) float -> bit
+  val is_ninf   : ('e,'k) float -> bit
+  val is_snan   : ('e,'k) float -> bit
+  val is_qnan   : ('e,'k) float -> bit
+
+  val fadd : rmode -> ('e,'k) float -> ('e,'k) float -> ('e,'k) float
 end
 
-module Make(B : Bignum) : sig
+(*
+  (** [sub ~rm x y] = x - y with rmode [rm] *)
+  val sub : ?rm:rmode -> t -> t -> t
 
-  type t
+  (** [mul ~rm x y] = x * y with rmode [rm]  *)
+  val mul : ?rm:rmode -> t -> t -> t
 
-  (** [create ~radix expn frac] creates gfloat from radix, signed expn
-      and fraction.  *)
-  val create : desc -> ?negative:bool -> expn:B.t -> B.t -> t
+  (** [div ~rm x y] = x / y with rmode [rm]  *)
+  val div : ?rm:rmode -> t -> t -> t
 
-  (** [zero ~radix expn_bits prec] creates gfloat equaled to zero from
-      radix, exponent bits and precision *)
-  val zero : desc -> t
-
-  (** [inf ~radix prec] creates positive or negative infinity from radix
-      and precision *)
-  val inf : ?negative:bool -> desc -> t
-
-  (** [nan ~radix prec] creates nan from radix and precision. *)
-  val nan : ?signaling:bool -> ?negative:bool -> ?payload:B.t -> desc -> t
-
-  (** [is_fin x] returns true if [x] is finite number, i.e. neither nan
-      nor inf *)
-  val is_fin : t -> bool
-
-  (** [is_nan x] returns true if [x] is nan *)
-  val is_nan : t -> bool
-
-  (** [is_signaling_nan x] returns true if [x] is nan and it's a
-      signaling one *)
-  val is_signaling_nan : t -> bool
-
-  (** [is_quite_nan x] returns true if [x] is nan and it's a
-      quite one *)
-  val is_quite_nan : t -> bool
-
-  (** [is_inf x] returns true if [x] is inf *)
-  val is_inf : t -> bool
-
-  (** [is_pos x] returns true if [x] is positive *)
-  val is_pos : t -> bool
-
-  (** [is_neg x] returns true if [x] is negative *)
-  val is_neg : t -> bool
-
-  (** [is_zero x] returns true if [x] is zero *)
-  val is_zero : t -> bool
-
-  (** [fin x] returns an exponent and fraction of [x], if
-      [x] is finite number, i.e. neither infinity, nor nan *)
-  val fin : t -> (B.t * B.t) option
-
-  (** [frac x] returns a fraction of a finite number or
-      a payload of a nan *)
-  val frac : t -> B.t option
-
-  (** [expn x] returns a exponent of a finite number *)
-  val expn : t -> B.t option
-
-  (** [add ~rm x y] = x + y with rounding [rm] *)
-  val add : ?rm:rounding -> t -> t -> t
-
-  (** [sub ~rm x y] = x - y with rounding [rm] *)
-  val sub : ?rm:rounding -> t -> t -> t
-
-  (** [mul ~rm x y] = x * y with rounding [rm]  *)
-  val mul : ?rm:rounding -> t -> t -> t
-
-  (** [div ~rm x y] = x / y with rounding [rm]  *)
-  val div : ?rm:rounding -> t -> t -> t
-
-  (** [sqrt x] returns a square root of [x] with rounding [rm] *)
-  val sqrt : ?rm:rounding -> t -> t
+  (** [sqrt x] returns a square root of [x] with rmode [rm] *)
+  val sqrt : ?rm:rmode -> t -> t
 
   (** [neg x] inverts sign of [x]  *)
   val neg : t -> t
 
   (** [round ~upto x] returns a rounded [x] to a [precision]. *)
-  val round : ?rm:rounding -> precision:int -> t -> t
+  val round : ?rm:rmode -> precision:int -> t -> t
 
   (** [extend x n] extends precision of [x] with [n] bits *)
   val extend : t -> int -> t
@@ -119,7 +64,7 @@ module Make(B : Bignum) : sig
   (** [equal x y] return true if [x = y] *)
   val equal : t -> t -> bool
 
-  (** A set of infix operators with default rounding = NearestTiesToEven *)
+  (** A set of infix operators with default rmode = NearestTiesToEven *)
   module Infix : sig
     val ( + ) : t -> t -> t
     val ( - ) : t -> t -> t
@@ -127,5 +72,5 @@ module Make(B : Bignum) : sig
     val ( / ) : t -> t -> t
     val ( = ) : t -> t -> bool
   end
-
-end
+ *)
+(* end *)
