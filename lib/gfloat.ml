@@ -51,6 +51,7 @@ module Make(Bignum : Core_float.Core) = struct
       let ( > ) = ugt
       let ( <= ) = ule
       let ( >= ) = uge
+      let ( >$ ) = sgt
       let ( <$ ) = slt
       let ( >$ ) = sgt
       let ( <=$ ) = sle
@@ -113,15 +114,16 @@ module Make(Bignum : Core_float.Core) = struct
   let rshift_frac frac n =
     Bignum.(frac lsr n), extract_last frac n
 
-  let half_of_bits n =
+  let half_of_sort s =
     let open Bignum in
-    let x = one (sort n) in
+    let x = one s in
+    let n = of_int s (Sort.size s) in
     x lsl n
 
   (* TODO: consider to add expn here and if all ones - adjust it  *)
   let round rm sign frac loss bits =
     let open Bignum in
-    let half = half_of_bits bits in
+    let half = half_of_sort (Bignum.sort loss) in
     let is_needed = match rm with
       | Positive_inf -> Bignum.inv sign
       | Negative_inf -> sign
@@ -168,7 +170,7 @@ module Make(Bignum : Core_float.Core) = struct
      into [precision] with a possible loss of bits in order to keep
      most significant bits. Returns [Some (expn, frac, loss)], if
      no exponent overflow occured, [None] otherwise. *)
-  let align_right ~base ~precision expn frac =
+  let align_right ~precision expn frac =
     let prec = Sort.size (Bignum.sort frac) in
     let zero = Bignum.(zero (sort frac)) in
     let unos = Bignum.(one (sort frac)) in
@@ -330,143 +332,112 @@ module Make(Bignum : Core_float.Core) = struct
   (* returns result sign *)
   let xor_sign s s' = Bignum.(is_one (s lxor s'))
 
-  (* let invert_loss loss = function
-   *   | LessThanHalf -> MoreThanHalf
-   *   | MoreThanHalf -> LessThanHalf
-   *   | x -> x
-   *
-   * let estimate_spot x =
-   *   let left  = minimize_exponent x in
-   *   let right = maximize_exponent x in
-   *   if Bignum.(left.expn <> x.expn && right.expn <> x.expn) then `Both
-   *   else if Bignum.(left.expn <> x.expn) then `Left
-   *   else if Bignum.(right.expn <> x.expn) then `Right
-   *   else `Nope
-   *
-   * let balance base x y =
-   *   match estimate_spot base x, estimate_spot base y with
-   *   | `Left,  _ when Bignum.(x.expn >$ y.expn) ->
-   *     minimize_exponent base x, y
-   *   | `Right, _ when Bignum.(x.expn <$ y.expn) ->
-   *     maximize_exponent base x, y
-   *   | _, `Left when Bignum.(x.expn <$ y.expn) ->
-   *     x, minimize_exponent base y
-   *   | _, `Right when Bignum.(x.expn >$ y.expn) ->
-   *     x, maximize_exponent base y
-   *   | _ ->
-   *     minimize_exponent base x, minimize_exponent base y *)
+  let invert_loss loss =
+    let open Bignum in
+    let half = half_of_sort (sort loss) in
+    ite (loss = half) loss (not loss)
 
-  (* [combine_loss more_signifincant less_significant]  *)
-  (* let combine_loss more less =
-   *   match more, less with
-   *   | _, ExactlyZero -> more
-   *   | ExactlyZero,_ -> LessThanHalf
-   *   | ExactlyHalf,_ -> MoreThanHalf
-   *   | _ -> more *)
+  let extend x addend = { x with frac = Bignum.zero_extend x.frac addend }
 
-  (* let neg x = {x with sign = Bignum.inv x.sign}
-   * let extend x addend = { x with frac = Bignum.zero_extend x.frac addend }
-   * let extract prec frac = Bignum.extract ~hi:(prec - 1) frac *)
+  let fadd rm a b =
+    let common_ground x y =
+      let open Bignum in
+      let expn = max x.expn y.expn in
+      let lost_bits =
+        Bignum.(ite (x.expn >$ y.expn) (x.expn - y.expn) (y.expn - x.expn)) in
+      let xfrac = ite (x.expn >$ y.expn) x.frac (x.frac lsr lost_bits) in
+      let yfrac = ite (y.expn >$ x.expn) y.frac (y.frac lsr lost_bits) in
+      let loss = ite (x.expn >$ y.expn)
+                   (extract_last y.frac lost_bits)
+                   (extract_last x.frac lost_bits) in
+      {expn; frac=xfrac}, {expn; frac=yfrac}, loss, lost_bits in
+    (* TODO: check for nan/inf needed *)
+    let x,y = a.data, b.data in
+    let x,y,loss,lost_bits = common_ground x y in
+    let frac = Bignum.(x.frac + y.frac) in
+    let expn = Bignum.(ite (frac >= x.frac) x.expn (succ x.expn)) in
+    (* TODO: check for expn oerflow needed  *)
 
-  let fadd rm a b = failwith "todo"
-    (* let common_ground base x y =
-     *   if Bignum.(x.expn = y.expn) then x,y,ExactlyZero
-     *   else if Bignum.is_zero x.frac then
-     *     {x with expn = y.expn} ,y,ExactlyZero
-     *   else if Bignum.is_zero y.frac then
-     *     x,{y with expn = x.expn },ExactlyZero
-     *   else
-     *     let x,y = balance base x y in
-     *     let expn = Bignum.max x.expn y.expn in
-     *     if Bignum.(x.expn >$ y.expn) then
-     *       let y, loss = unsafe_rshift base y Bignum.(expn - y.expn) in
-     *       x, y, loss
-     *     else
-     *       let x,loss = unsafe_rshift base x Bignum.(expn - x.expn) in
-     *       x,y,loss in
-     * check_operands a b;
-     * match a.data, b.data with
-     * | Fin x, Fin y ->
-     *   let x = maximize_exponent (radix a) x in
-     *   let y = maximize_exponent (radix a) y in
-     *   let x,y,loss = common_ground (radix a) x y in
-     *   let frac = Bignum.(x.frac + y.frac) in
-     *   let data =
-     *     if Bignum.(frac >= x.frac) then
-     *       Fin (norm (radix a) {expn=x.expn; frac=round rm Pos frac loss})
-     *     else
-     *       let x = extend x (prec a) in
-     *       let y = extend y (prec a) in
-     *       let frac = Bignum.(x.frac + y.frac) in
-     *       match align_right (radix a) (prec a) x.expn frac with
-     *       | None -> Inf
-     *       | Some (expn, frac, loss') ->
-     *         let loss = if Bignum.(x.expn = expn) then loss
-     *           else combine_loss loss' loss in
-     *         let frac = extract (prec a) frac in
-     *         let frac = round rm Pos frac loss in
-     *         Fin (norm (radix a) {expn; frac}) in
-     *   { a with data }
-     * | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
-     * | Nan _, _ -> a
-     * | _, Nan _ -> b
-     * | Inf, Inf when is_neg a && is_pos b -> a
-     * | Inf, Inf when is_pos a && is_neg b -> a
-     * | Inf, _ -> a
-     * | _, Inf -> b *)
+    let frac =
+      Bignum.ite Bignum.(frac >= x.frac) (round rm Bignum.b0 frac loss lost_bits)
+        begin
+          let x = extend x a.desc.fsort in (* TODO: actually, one is enough  *)
+          let y = extend y a.desc.fsort in
+          let frac = Bignum.(x.frac + y.frac) in
+          let uno = Bignum.one (Bignum.sort frac) in
+          let loss' = extract_last frac uno in
+          let frac = Bignum.(frac lsr uno) in (* TODO: and extract ! *)
+          let loss'' = Bignum.concat (Bignum.sort frac) [loss'; loss] in
+          (* TODO: need to use another sort here *)
 
+          round rm Bignum.b0 frac loss'' (Bignum.succ lost_bits)
+        end in
+     { a with data = norm {expn; frac} }
 
-(*
   let sub rm a b =
-    let common_ground base x y =
-      if Bignum.(x.expn = y.expn) then x,y,ExactlyZero, Bignum.(x.frac < y.frac)
-      else if Bignum.is_zero x.frac then
-        {x with expn = y.expn}, y, ExactlyZero, true
-      else if Bignum.is_zero y.frac then
-        x, {y with expn = x.expn}, ExactlyZero, false
-      else
-        let expn = Bignum.max x.expn y.expn in
-        let uno = Bignum.one a.desc.ebits in
-        if Bignum.(x.expn >$ y.expn) then
-          let x = unsafe_lshift base x uno in
-          let y, loss = unsafe_rshift base y Bignum.(expn - y.expn - uno) in
-          x, y, loss, false
-        else
-          let x,loss = unsafe_rshift base x Bignum.(expn - x.expn - uno) in
-          let y = unsafe_lshift base y uno in
-          x,y,loss, true in
-    check_operands a b;
-    match a.data, b.data with
-    | Fin x, Fin y ->
-      let x = minimize_exponent (radix a) x in
-      let y = minimize_exponent (radix a) y in
-      let x = extend x (prec a) in
-      let y = extend y (prec a) in
-      let x,y,loss,reverse = common_ground (radix a) x y in
-      let loss = invert_loss loss in
-      let borrow = if loss = ExactlyZero then
-          Bignum.zero (sort x.frac)
-        else Bignum.one (sort x.frac) in
-      let frac = if reverse then Bignum.(y.frac - x.frac - borrow)
-        else Bignum.(x.frac - y.frac - borrow) in
-      let sign = if reverse then revert_sign a.sign else a.sign in
-      let expn,frac,loss' =
-        align_right_exn ~base:(radix a) ~precision:(prec a) x.expn frac in
-      let loss = if Bignum.(x.expn = expn) then loss
-        else combine_loss loss' loss in
-      let frac = Bignum.extract ~hi:((prec a) - 1) frac in
-      let frac = round rm sign frac loss in
-      let data = Fin (norm (radix a) {expn; frac}) in
-      let a = {a with data; sign} in
-      if is_zero a then {a with sign = Pos} else a
-    | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
-    | Nan _, _ -> a
-    | _, Nan _ -> b
-    | Inf, Inf -> nan ~negative:true a.desc
-    | Inf, _ -> a
-    | _, Inf -> b
+    let common_ground x y =
+      let open Bignum in
+      let if_expn ~equal ~xgreater ~ygreater =
+        ite (x.expn = y.expn) equal
+          (ite (x.expn >$ y.expn) xgreater ygreater) in
+      let expn = max x.expn y.expn in
+      let one = one a.desc.esort in
+      let lost_bits =
+        if_expn ~equal:(zero (sort x.expn))
+          ~xgreater:(x.expn - y.expn)
+          ~ygreater:(y.expn - x.expn) in
+      let lost_bits = lost_bits - one in (* what if 0? *)
+      let loss =
+        if_expn ~equal:(zero (sort x.expn))
+          ~xgreater:(extract_last y.frac lost_bits)
+          ~ygreater:(extract_last x.frac lost_bits) in
+      let xfrac =
+        if_expn ~equal:x.frac
+          ~xgreater:(x.frac lsl one)
+          ~ygreater:(x.frac lsr lost_bits) in
+      let yfrac =
+        if_expn ~equal:y.frac
+          ~xgreater:(y.frac lsr lost_bits)
+          ~ygreater:(y.frac lsl one) in
+      let reverse =
+        if_expn ~equal:(x.frac < y.frac)
+          ~xgreater:b0 ~ygreater:b1 in
+      {expn; frac=xfrac}, {expn; frac=yfrac}, reverse, loss, lost_bits in
+    let x,y = a.data, b.data in
+    let x = minimize_exponent x in
+    let y = minimize_exponent y in
+    let x = extend x a.desc.fsort in (* TODO: one is enough *)
+    let y = extend y a.desc.fsort in
+    let x,y,reverse,loss,lost_bits = common_ground x y in
+    let loss = invert_loss loss in
+    let borrow = Bignum.(ite (is_zero loss)
+                   (zero (sort x.frac)) (one (sort x.frac))) in
+    let frac = Bignum.(ite reverse
+                 (y.frac - x.frac - borrow)
+                 (x.frac - y.frac - borrow)) in
+    let sign = Bignum.(ite reverse (inv a.sign) a.sign) in
+    let expn = Bignum.(ite (msb frac) (succ x.expn) x.expn) in
+    let frac = Bignum.(ite (msb frac) (frac lsr one (sort frac)) frac) in
+    let loss' = Bignum.(ite (msb frac)
+                          (extract_last frac (one (sort frac)))
+                          (zero (sort frac))) in
 
-  let add_or_sub rm subtract a b =
+    (* TODO: check sort in concat here and extract! *)
+    let loss = Bignum.ite Bignum.(msb frac)
+                 (Bignum.concat (Bignum.sort frac) [loss'; loss])
+                 loss in
+    let frac = Bignum.extract a.desc.fsort
+                 (Bignum.of_int a.desc.fsort ((prec a) - 1))
+                 (Bignum.of_int a.desc.fsort 0)
+                 frac in
+    let lost_bits =
+      Bignum.(ite (msb frac) (succ lost_bits) lost_bits) in
+    let frac = round rm sign frac loss lost_bits in
+    let data = norm {expn; frac} in
+    {a with data; sign}
+
+
+(* let add_or_sub rm subtract a b =
     check_operands a b;
     let s1 = Bignum.of_bool subtract in
     let s2 = Bignum.of_sign a.sign in
