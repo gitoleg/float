@@ -182,28 +182,28 @@ module Make(B : Theory.Basic) = struct
     x lsl n
 
   (* TODO: consider to add expn here and if all ones - adjust it  *)
-  let round rm sign frac loss =
-    let open Rmode in
-    let open B in
-    rm >>= fun rm ->
-    let rm = Value.sort rm in
-    frac >>= fun vfrac ->
-    let half = half_of_loss loss in
-    let is_needed = match (describe rm) with
-      | RTP -> B.inv sign
-      | RTN -> sign
-      | RNA -> loss >= half
-      | RNE ->
-        if_ (loss > half) ~then_:b1
-          ~else_:(
-            if_ (loss = half) ~then_:(lsb loss)
-              ~else_:b0)
-      | _ -> b0 in
-    let is_needed = and_ (non_zero loss) is_needed in
-    let all_ones = not (zero (Value.sort vfrac)) in
-    if_ (and_ (frac <> all_ones) is_needed)
-      ~then_:(succ frac)
-      ~else_:frac
+  let round rm sign frac loss = frac
+    (* let open Rmode in
+     * let open B in
+     * rm >>= fun rm ->
+     * let rm = Value.sort rm in
+     * frac >>= fun vfrac ->
+     * let half = half_of_loss loss in
+     * let is_needed = match (describe rm) with
+     *   | RTP -> B.inv sign
+     *   | RTN -> sign
+     *   | RNA -> loss >= half
+     *   | RNE ->
+     *      if_ (loss > half) ~then_:b1
+     *       ~else_:(
+     *         if_ (loss = half) ~then_:(lsb loss)
+     *           ~else_:b0)
+     *   | _ -> b0 in
+     * let is_needed = and_ (non_zero loss) is_needed in
+     * let all_ones = not (zero (Value.sort vfrac)) in
+     * if_ (and_ (frac <> all_ones) is_needed)
+     *   ~then_:(succ frac)
+     *   ~else_:frac *)
 
   (* [align_right base precision expn frac] shifts fraction right to fit
      into [precision] with a possible loss of bits in order to keep
@@ -278,8 +278,8 @@ module Make(B : Theory.Basic) = struct
     x >>-> fun fs xv ->
     let expn = Value.semantics expn in
     let coef = Value.semantics coef in
-    let xv = Some {xv with expn; coef} in
-    Knowledge.return (Value.put gfloat (Value.empty fs) xv)
+    let gf = Some {xv with expn; coef} in
+    Knowledge.return (Value.put gfloat (Value.empty fs) gf)
 
   let with' x expn coef =
     expn >>= fun expn ->
@@ -376,18 +376,6 @@ module Make(B : Theory.Basic) = struct
     let half = half_of_loss loss in
     ite (loss = half) loss (not loss)
 
-  let extend x addend =
-    x >>-> fun fsort v ->
-    let size = Floats.sigs fsort |> Bits.size in
-    let sigs' = Bits.define (size + addend) in
-    let fsort' = Floats.define (Floats.exps fsort) sigs' in
-    let coef  = significand x in
-    let coef' = B.unsigned sigs' coef in
-    coef' >>= fun coef' ->
-    let coef' = Value.semantics coef' in
-    let x = Some {v with coef=coef'} in
-    !! (Value.put gfloat (Value.empty fsort') x)
-
   let combine_loss more less =
     more >>-> fun smore _ ->
     less >>-> fun sless _ ->
@@ -411,25 +399,35 @@ module Make(B : Theory.Basic) = struct
                  (extract_last xcoef lost_bits) in
     let coef = B.(xcoef + ycoef) in
     let expn = B.(ite (coef >= xcoef) expn (succ expn)) in
-    (* TODO: check for expn oerflow needed  *)
+    (* TODO: check for expn overflow needed  *)
+
     let coef =
       ite (coef >= xcoef) (round rm b0 coef loss)
         begin
-          let x = extend x 1 in (* TODO: actually, may not extend here *)
-          let y = extend y 1 in
-          let xcoef = significand x in
-          let ycoef = significand y in
-          let coef = xcoef + ycoef in
           coef >>= fun vcoef ->
           let one = one (Value.sort vcoef) in
-          let loss' = extract_last coef one in
-          let coef = coef lsr one in (* TODO: and extract ! *)
-          let coef = unsigned (Value.sort vcoef) coef in
-          let loss'' = combine_loss loss' loss in
-          round rm B.b0 coef loss''
-        end in
+          let coef,loss' = rshift_frac coef one in
+          let loss = combine_loss loss' loss in
+          let sh = of_int (Value.sort vcoef)
+                     Caml.(Bits.size (Value.sort vcoef) - 1) in
+          let one = one lsl sh in
+          let coef = coef lor one in
+          round rm b0 coef loss
+        end
+    in
     with' x expn coef
 
+  (* let extend x addend =
+   *   x >>-> fun fsort v ->
+   *   let size = Floats.sigs fsort |> Bits.size in
+   *   let sigs' = Bits.define (size + addend) in
+   *   let fsort' = Floats.define (Floats.exps fsort) sigs' in
+   *   let coef  = significand x in
+   *   let coef' = B.unsigned sigs' coef in
+   *   coef' >>= fun coef' ->
+   *   let coef' = Value.semantics coef' in
+   *   let x = Some {v with coef=coef'} in
+   *   !! (Value.put gfloat (Value.empty fsort') x) *)
 
   (* let fsub rm a b =
    *   let common_ground x y =

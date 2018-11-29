@@ -1,8 +1,60 @@
 open Core_kernel
-open OUnit2
+(* open OUnit2 *)
 open Bap.Std
+open Bap_knowledge
+open Bap_core_theory
+
 open Gfloat
-open Gfloat_w
+open Gfloat_exp
+
+module G = Gfloat.Make(BIL.Reify)
+
+open Knowledge.Syntax
+
+[@@warning "-3"]
+
+let to_exp x =
+  match Knowledge.run x Knowledge.empty with
+  | Error _ -> assert false
+  | Ok (s,_) ->
+     match Semantics.get BIL.exp s with
+     | None -> printf "none!\n"
+     | Some e ->
+        match Exp.eval e with
+        | Bil.Imm x ->
+           printf "e %s!\n" (Word.to_string x)
+        | _ -> assert false
+
+type bits11
+type bits53
+
+let exps : bits11 bitv sort = Bits.define 11
+let sigs : bits53 bitv sort = Bits.define 53
+let fsort = Floats.define exps sigs
+
+let a () =
+  let create expn coef =
+    let sign = BIL.Reify.b0 in
+    let expn = Word.of_string expn in
+    let coef = Word.of_string coef in
+    let expn =
+      let v = Value.create exps Semantics.empty in
+      !! (Value.put BIL.exp v (Some (Bil.int expn))) in
+    let coef =
+      let v = Value.create sigs Semantics.empty in
+      !! (Value.put BIL.exp v (Some (Bil.int coef))) in
+    G.finite fsort sign expn coef in
+  let x = create "0x7CE:11u" "0x10CCCCCCCCCCCD:53u" in
+  let y = create "0x7CD:11u" "0x1B333333333333:53u" in
+  let rm = Knowledge.return (Value.create Rmode.rne Semantics.empty) in
+  let z = G.fadd rm x y in
+  let _ze = G.exponent z in
+  let zc = G.significand z in
+  zc >>| fun v ->
+  Value.semantics v
+
+let res = to_exp @@ a ()
+
 
 (* let allow_output = true
  *

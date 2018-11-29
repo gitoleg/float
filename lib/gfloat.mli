@@ -26,7 +26,6 @@ module Make(B : Theory.Basic) : sig
   val is_qnan   : ('e,'k) float value t -> bit value t
 
   val fadd    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t
-  (* val fsub    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t *)
 
 end
 
