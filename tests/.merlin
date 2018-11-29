@@ -8,5 +8,7 @@ PKG core_kernel
 PKG zarith
 PKG oUnit
 PKG bap
+PKG bap-core-theory
+PKG bap-knowledge
 
 FLG -short-paths

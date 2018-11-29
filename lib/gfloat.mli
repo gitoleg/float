@@ -1,42 +1,33 @@
-open Core_float.Types
+open Bap_knowledge
+open Bap_core_theory
 
-type rmode
+module Make(B : Theory.Basic) : sig
 
-
-module Make(B : Core_float.Core) : sig
   type 'a t = 'a knowledge
 
-  type 'a number = 'a bitv value knowledge
-  type nonrec bit = bit value knowledge
+  val finite : ('e,'k) float sort -> bit value t ->
+               'e bitv value t -> 'k bitv value t ->
+               ('e,'k) float value t
 
-  type ('a, 'b) desc
-  type ('a, 'b) float
+  val pinf : ('e,'k) float sort -> ('e,'k) float value t
+  val ninf : ('e,'k) float sort -> ('e,'k) float value t
+  val snan : ('e,'k) float sort -> 'k bitv value t -> ('e,'k) float value t
+  val qnan : ('e,'k) float sort -> 'k bitv value t -> ('e,'k) float value t
 
-  val rne : rmode (** round to nearest, ties to even *)
-  val rna : rmode (** round to nearest, ties to away *)
-  val rtp : rmode (** round toward positive infinity *)
-  val rtn : rmode (** round toward negative infinity *)
-  val rtz : rmode (** round toward zero              *)
+  val exponent    : ('e,'k) float value t -> 'e bitv value t
+  val significand : ('e,'k) float value t -> 'k bitv value t
+  val fsign       : ('e,'k) float value t -> bit value t
 
-  val finite : ('e,'k) desc -> bit -> 'e number -> 'k number -> ('e, 'k) float
+  val is_finite : ('e,'k) float value t -> bit value t
+  val is_fzero  : ('e,'k) float value t -> bit value t
+  val is_pinf   : ('e,'k) float value t -> bit value t
+  val is_ninf   : ('e,'k) float value t -> bit value t
+  val is_snan   : ('e,'k) float value t -> bit value t
+  val is_qnan   : ('e,'k) float value t -> bit value t
 
-  val pinf : ('e,'k) desc -> ('e,'k) float
-  val ninf : ('e,'k) desc -> ('e,'k) float
-  val snan : ('e,'k) desc -> 'k bitv value t -> ('e,'k) float
-  val qnan : ('e,'k) desc -> 'k bitv value t -> ('e,'k) float
+  val fadd    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t
+  (* val fsub    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t *)
 
-  val exponent    : ('e,'k) float -> 'e bitv value t
-  val coefficient : ('e,'k) float -> 'k bitv value t
-  val fsign       : ('e,'k) float -> bit
-
-  val is_finite : ('e,'k) float -> bit
-  val is_fzero  : ('e,'k) float -> bit
-  val is_pinf   : ('e,'k) float -> bit
-  val is_ninf   : ('e,'k) float -> bit
-  val is_snan   : ('e,'k) float -> bit
-  val is_qnan   : ('e,'k) float -> bit
-
-  val fadd : rmode -> ('e,'k) float -> ('e,'k) float -> ('e,'k) float
 end
 
 (*

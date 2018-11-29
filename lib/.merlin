@@ -1,6 +1,8 @@
 PKG bap
+PKG bap-core-theory
 PKG core_kernel
 
+FLG -short-paths
 S .
 B ../_build/lib
 
