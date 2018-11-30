@@ -307,35 +307,53 @@ module Make(B : Theory.Basic) = struct
     let pow, num = nearest_pow2 size in
     let sort' = Bits.define num in
     let shifts = List.init pow ~f:(fun p -> num / (2 lsl p)) in
-    (* let shifts,_ =
-     *   List.fold shifts ~init:([],0)
-     *     ~f:(fun (acc,prev) curr ->
-     *       let sum = curr + prev in
-     *       (sum, curr) :: acc, sum) in
-     * let shifts = List.rev shifts in
-     * let x' = B.unsigned sort' x in
-     * let _, n = List.fold shifts ~init:(x', B.zero sort)
-     *              ~f:(fun (x, n) (sum, sh)
-     *
-     *              ) in *)
 
-    let _,masks =
-      List.fold shifts ~init:(0,[])
-        ~f:(fun (prev, acc) curr ->
-          let shift = curr + prev in
-          let shift' = B.of_int sort' shift in
-          let mask = B.(ones sort' lsl shift') in
-          shift, (curr, mask)::acc) in
-    let masks = List.rev masks in
+    let shifts,_ =
+      List.fold shifts ~init:([],0)
+        ~f:(fun (acc,prev) curr ->
+          let sum = curr + prev in
+          (sum, curr) :: acc, sum) in
+    let shifts = List.rev shifts in
     let x' = B.unsigned sort' x in
-    let _,n =
-      List.fold masks ~init:(x', B.zero sort)
-        ~f:(fun (x,n) (sh, mask) ->
-          let shift = B.of_int sort sh in
-          let is_zero = B.(is_zero (x land mask)) in
-          B.ite is_zero B.(x lsl shift) x,
-          B.ite is_zero B.(n + shift) n
+    let r =
+      List.fold shifts ~init:(!! (x', B.zero sort))
+        ~f:(fun x (sum, sh) ->
+          x >>= fun (x,n) ->
+          let shift =  B.of_int sort sh in
+          let sum = B.of_int sort sum in
+          let mask = B.(ones sort' lsl sum) in
+          Var.Generator.fresh sort' >>= fun v_mask ->
+          Var.Generator.fresh sort' >>= fun masked_x ->
+          let x' =
+            B.let_ v_mask mask (
+                B.let_ masked_x B.(x land var v_mask) (
+                    B.(ite (is_zero (var masked_x)) B.(x lsl shift) x)
+                  )) in
+          let n' =
+            B.let_ v_mask mask (
+                B.let_ masked_x B.(x land var v_mask) (
+                    B.(ite (is_zero (var masked_x)) B.(succ n) n))) in
+          !! (x', n')
         ) in
+    r >>= fun (_,n) ->
+
+    (* let _,masks =
+     *   List.fold shifts ~init:(0,[])
+     *     ~f:(fun (prev, acc) curr ->
+     *       let shift = curr + prev in
+     *       let shift' = B.of_int sort' shift in
+     *       let mask = B.(ones sort' lsl shift') in
+     *       shift, (curr, mask)::acc) in
+     * let masks = List.rev masks in
+     * let x' = B.unsigned sort' x in
+     * let _,n =
+     *   List.fold masks ~init:(x', B.zero sort)
+     *     ~f:(fun (x,n) (sh, mask) ->
+     *       let shift = B.of_int sort sh in
+     *       let is_zero = B.(is_zero (x land mask)) in
+     *       B.ite is_zero B.(x lsl shift) x,
+     *       B.ite is_zero B.(n + shift) n
+     *     ) in *)
     let dif = B.of_int sort (num - size) in
     B.ite (B.is_zero x) (B.of_int sort size) B.(n - dif)
 
