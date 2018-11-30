@@ -25,7 +25,7 @@ let to_exp x =
         match Exp.eval e with
         | Bil.Imm x ->
            printf "evaluated!\n%!";
-           printf "e %s!\n" (Word.to_string x)
+           printf "e %s!\n" (Word.string_of_value ~hex:false x)
         | _ -> assert false
 
 type bits11
@@ -54,6 +54,13 @@ let a () =
   z >>| fun v -> Value.semantics v
 
 
+let b () =
+  let x = Word.of_int64 ~width:53 0x1L in
+  let x = create sigs x in
+  let y = G.clz x in
+  y >>| fun y -> Value.semantics y
+
+
 type bits5
 type bits15
 
@@ -80,7 +87,9 @@ let a () =
   z >>| fun v -> Value.semantics v
 
 
-let res = to_exp @@ a ()
+
+let res = to_exp @@ b ()
+
 
 
 (* let allow_output = true
