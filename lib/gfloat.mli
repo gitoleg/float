@@ -5,6 +5,12 @@ module Make(B : Theory.Basic) : sig
 
   type 'a t = 'a knowledge
 
+  val rne : rmode value t
+  val rna : rmode value t
+  val rtp : rmode value t
+  val rtn : rmode value t
+  val rtz : rmode value t
+
   val finite : ('e,'k) float sort -> bit value t ->
                'e bitv value t -> 'k bitv value t ->
                ('e,'k) float value t
@@ -26,5 +32,11 @@ module Make(B : Theory.Basic) : sig
   val is_qnan   : ('e,'k) float value t -> bit value t
 
   val fadd    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t
-  val fsub    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t
+
+  (* val fsub    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t *)
+  val fsub    : rmode value t -> ('e,'k) float value t
+                -> ('e,'k) float value t -> 'e bitv value t
+
+  val clz : 'k bitv value t ->  'k bitv value t
+
 end
