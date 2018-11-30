@@ -48,10 +48,9 @@ let a () =
   let y = create "0x7CD:11u" "0x1B333333333333:53u" in
   let rm = Knowledge.return (Value.create Rmode.rne Semantics.empty) in
   let z = G.fadd rm x y in
-  let _ze = G.exponent z in
+  let ze = G.exponent z in
   let zc = G.significand z in
-  zc >>| fun v ->
-  Value.semantics v
+  zc >>| fun v -> Value.semantics v
 
 let res = to_exp @@ a ()
 
