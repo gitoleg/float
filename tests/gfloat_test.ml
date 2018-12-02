@@ -20,12 +20,12 @@ let to_exp x =
      match Semantics.get GE.exp s with
      | None -> printf "none!\n"
      | Some e ->
-        printf "%s\n" (Exp.to_string e);
+        (* printf "%s\n" (Exp.to_string e); *)
 
         match Exp.eval e with
         | Bil.Imm x ->
            printf "evaluated!\n%!";
-           printf "e %s!\n" (Word.string_of_value ~hex:false x)
+           printf "result: %s!\n" (Word.to_string x)
         | _ -> assert false
 
 type bits11
@@ -39,58 +39,47 @@ let create sort w =
   let v = Value.create sort Semantics.empty in
   !! (Value.put GE.exp v (Some (Bil.int w)))
 
-let a () =
+let test () =
   let create expn coef =
     let sign = GE.Basic.b0 in
     let expn = create exps (Word.of_string expn) in
     let coef = create sigs (Word.of_string coef) in
     G.finite fsort sign expn coef in
-  let x = create "0x7CE:11u" "0x10CCCCCCCCCCCD:53u" in
-  let y = create "0x7CD:11u" "0x1B333333333333:53u" in
+  let x = create "0x7CD:11u" "0x1B333333333333:53u" in
+  let y = create "0x7CE:11u" "0x10CCCCCCCCCCCD:53u" in
   let rm = G.rne in
-  let z = G.fsub rm x y in
-  (* let _ze = G.exponent z in
-   * let zc = G.significand z in *)
-  z >>| fun v -> Value.semantics v
+  let z = G.fmul rm x y in
+  let _ze = G.exponent z in
+  let zc = G.significand z in
+  zc >>| fun v -> Value.semantics v
 
-
-let b () =
-  let x = Word.of_int64 ~width:53 0x1L in
-  let x = create sigs x in
-  let y = G.clz x in
-  y >>| fun y -> Value.semantics y
-
-
-type bits5
-type bits15
-
-let exps : bits11 bitv sort = Bits.define 5
-let sigs : bits53 bitv sort = Bits.define 15
-let fsort = Floats.define exps sigs
-
-let create sort w =
-  let v = Value.create sort Semantics.empty in
-  !! (Value.put GE.exp v (Some (Bil.int w)))
-
-let a () =
+let test_min () =
   let create expn coef =
     let sign = GE.Basic.b0 in
     let expn = create exps (Word.of_string expn) in
     let coef = create sigs (Word.of_string coef) in
     G.finite fsort sign expn coef in
-  let x = create "0x4:5u" "0x05:15u" in
-  let y = create "0x4:5u" "0x06:15u" in
-  let rm = G.rne  in
-  let z = G.fsub rm x y in
-  (* let _ze = G.exponent z in
-   * let zc = G.significand z in *)
+  let x = create "0x01:11u" "0x1:53u" in
+  let z = G.minimize_exponent x in
+  let z = G.exponent z in
   z >>| fun v -> Value.semantics v
 
+let res = to_exp @@ test ()
 
 
-let res = to_exp @@ b ()
+module Clz = struct
+  type bits123
 
+  let sigs : bits123 bitv sort = Bits.define 123
 
+  let test_clz () =
+    let x = Word.of_int64 ~width:123 0x2L in
+    let x = create sigs x in
+    let y = G.clz x in
+    y >>| fun y -> Value.semantics y
+
+  let res () = to_exp @@ test_clz ()
+end
 
 (* let allow_output = true
  *
