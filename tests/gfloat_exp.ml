@@ -406,8 +406,3 @@ module BIL : Theory.Core = struct
   include Theory.Core.Empty
   include Basic
 end
-
-let init () = Theory.register
-    ~desc:"denotes programs in terms of BIL expressions and statements"
-    ~name:"bil"
-    (module BIL)

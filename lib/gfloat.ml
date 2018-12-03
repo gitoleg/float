@@ -12,6 +12,33 @@ type rounding =
   | Negative_inf  (** round toward negative infinity *)
 [@@deriving sexp]
 
+type gfloat = {
+    sign : semantics;
+    expn : semantics;
+    coef : semantics;
+    is_snan : semantics;
+    is_qnan : semantics;
+    is_inf  : semantics;
+  }
+
+module Float_domain = struct
+  open Domain.Order
+
+  type t = gfloat option
+
+  let empty = None
+
+  let partial x y : Domain.Order.partial = match x,y with
+    | None,None -> EQ
+    | None,_ -> LE
+    | _,None -> GE
+    | _ -> NC
+
+  let inspect t = failwith "unimplemented"
+
+end
+
+let gfloat = Semantics.declare ~name:"gfloat" (module Float_domain)
 
 module Rounding = struct
   open Knowledge.Syntax
@@ -50,8 +77,6 @@ module Rounding = struct
     match Value.get rounding r with
     | None -> !! None
     | Some r -> !! (Some r)
-
-
 end
 
 module Make(B : Theory.Basic) = struct
@@ -122,34 +147,6 @@ module Make(B : Theory.Basic) = struct
   end
 
   type 'a t = 'a knowledge
-
-  type gfloat = {
-    sign : semantics;
-    expn : semantics;
-    coef : semantics;
-    is_snan : semantics;
-    is_qnan : semantics;
-    is_inf  : semantics;
-  }
-
-  module Float_domain = struct
-    open Domain.Order
-
-    type t = gfloat option
-
-    let empty = None
-
-    let partial x y : Domain.Order.partial = match x,y with
-      | None,None -> EQ
-      | None,_ -> LE
-      | _,None -> GE
-      | _ -> NC
-
-    let inspect t = failwith "unimplemented"
-
-  end
-
-  let gfloat = Semantics.declare ~name:"gfloat" (module Float_domain)
 
   let significand : ('e,'s) float value t -> 's bitv value t =
     fun x -> x >>= fun v ->
@@ -311,9 +308,10 @@ module Make(B : Theory.Basic) = struct
     find 0 1
 
   let bind exp body =
-    sort exp >>= fun s ->
+    exp >>= fun exp ->
+    sort !!exp >>= fun s ->
     Var.Generator.fresh s >>= fun v ->
-    B.let_ v exp (body (B.var v))
+    B.let_ v !!exp (body (B.var v))
 
   let clz x =
     sort x >>= fun sort ->
@@ -324,59 +322,48 @@ module Make(B : Theory.Basic) = struct
     let shifts,_ =
       List.fold shifts ~init:([],0)
         ~f:(fun (acc,prev) curr ->
-          let sum = curr + prev in
-          (sum, curr) :: acc, sum) in
+          let total = curr + prev in
+          (total, curr) :: acc, total) in
     let shifts = List.rev shifts in
     let x' = B.unsigned sort' x in
-    let r =
-      List.fold shifts ~init:(!! (x', B.zero sort))
-        ~f:(fun x (sum, sh) ->
-          x >>= fun (x,n) ->
-          let shift =  B.of_int sort sh in
-          let sum = B.of_int sort sum in
-          let mask = B.(ones sort' lsl sum) in
-          Var.Generator.fresh sort' >>= fun v_mask ->
-          Var.Generator.fresh sort' >>= fun masked_x ->
-          let x' =
-            B.let_ v_mask mask (
-                B.let_ masked_x B.(x land var v_mask) (
-                    B.(ite (is_zero (var masked_x)) B.(x lsl shift) x))) in
-          let n' =
-            B.let_ v_mask mask (
-                B.let_ masked_x B.(x land var v_mask) (
-                    B.(ite (is_zero (var masked_x)) B.(n + shift) n))) in
-          !! (x', n')) in
-    r >>= fun (_,n) ->
+    let rec loop lets x = function
+      | [] -> List.fold lets ~f:B.(+) ~init:(B.zero sort)
+      | (total, shift) :: shifts ->
+         let shift = B.of_int sort shift in
+         let total = B.of_int sort total in
+         let mask = B.(ones sort' lsl total) in
+         let nextx = B.(ite (is_zero (x land mask)) (x lsl shift) x) in
+         let nextn = B.(ite (is_zero (x land mask)) shift (B.zero sort)) in
+         bind nextx @@ fun nextx ->
+         bind nextn @@ fun nextn ->
+         loop (nextn :: lets) nextx shifts in
+    let n = loop [] x' shifts in
     let dif = B.of_int sort (num - size) in
     B.ite (B.is_zero x) (B.of_int sort size) B.(n - dif)
 
-  (* the same as [align_right] above, but stops in case of bits loss
-     OR if exponent reached a maximum of it's value
-     TODO: consider test frac for zero to prevent expn change *)
-  let safe_align_right expn coef =
-    expn >>= fun vexpn ->
-    coef >>= fun vcoef ->
-    let max_expn = max_exponent (Value.sort vexpn) in
-    let prec = Bits.size (Value.sort vcoef) in
-    let unos = B.(one (Value.sort vcoef)) in
-    let rec run i expn coef =
-      if i < prec then
-        let stop = B.(or_ (expn = max_expn) (lsb coef)) in
-        let expn = B.(ite stop expn (succ expn)) in
-        let coef = B.(ite stop coef (coef lsr unos)) in
-        run (i + 1) expn coef
-      else expn, coef in
-    !! (run 0 expn coef)
+  let possible_lshift expn coef =
+    let open B in
+    sort expn >>= fun exps ->
+    sort coef >>= fun sigs ->
+    let min_expn = min_exponent exps in
+    bind (clz coef) @@ fun clz ->
+    Var.Generator.fresh sigs >>= fun v ->
+    let_ v
+      (umin clz (unsigned sigs (abs (expn - min_expn))))
+      (var v)
 
   (* TODO: consider test coef for zero to prevent expn change *)
   let safe_align_left expn coef =
     let open B in
     sort expn >>= fun exps ->
     sort coef >>= fun sigs ->
-    let min_expn = min_exponent exps in
-    let clz = clz coef in
-    let shift = umin clz (unsigned sigs (abs (expn - min_expn))) in
-    let dexpn = umin (unsigned exps clz) (abs (expn - min_expn)) in
+    (* let min_expn = min_exponent exps in
+     * let clz = clz coef in *)
+    (* let shift = umin clz (unsigned sigs (abs (expn - min_expn))) in
+     * let dexpn = umin (unsigned exps clz) (abs (expn - min_expn)) in *)
+
+    let shift = possible_lshift expn coef in
+    let dexpn = unsigned exps shift in
     let coef = coef lsl shift in
     let expn = expn + dexpn in
     !! (expn,coef)
@@ -410,50 +397,6 @@ module Make(B : Theory.Basic) = struct
     let e = exponent x in
     let c = significand x in
     safe_align_left e c >>= fun (expn,coef) ->
-    with' x ~expn ~coef
-
-  let test x =
-    let expn = exponent x in
-    let expn = B.succ expn in
-    x >>-> fun xs xv ->
-    sema expn >>= fun expn ->
-    let y = Some {xv with expn; } in
-    !! (Value.put gfloat (Value.empty xs) y)
-
-  let test x =
-    let expn = exponent x in
-    sort expn >>= fun exps ->
-    Var.Generator.fresh exps >>= fun v ->
-    B.let_ v (B.succ expn)
-      begin
-        let var = B.var v in
-        x >>-> fun xs xv ->
-        sema var >>= fun expn ->
-        let y = Some {xv with expn; } in
-        !! (Value.put gfloat (Value.empty xs) y)
-      end
-
-  let minimize_exponent' x =
-    let open B in
-    let expn = exponent x in
-    let coef = significand x in
-    sort expn >>= fun exps ->
-    sort coef >>= fun sigs ->
-    let min_expn = min_exponent exps in
-    bind (clz coef) (fun clz ->
-        let shift = umin clz (unsigned sigs (abs (expn - min_expn))) in
-        let dexpn = umin (unsigned exps clz) (abs (expn - min_expn)) in
-        let coef = coef lsl shift in
-        let expn = expn + dexpn in
-        with' x ~expn ~coef)
-
-  (* max exponent without bit loss or exponent overflow,
-     fraction shifted as right as possible, i.e. it occupies
-     less significant bits *)
-  let maximize_exponent x =
-    let e = exponent x in
-    let c = significand x in
-    safe_align_right e c >>= fun (expn,coef) ->
     with' x ~expn ~coef
 
   let norm = minimize_exponent
@@ -609,6 +552,13 @@ module Make(B : Theory.Basic) = struct
     let loss' = B.(loss' lsl lost_bits) in
     B.(loss' lor loss')
 
+  let match_cmp x y ~on_equal ~on_gt ~on_lt =
+    let open B in
+    match_ [
+        (x =  y) --> on_equal;
+        (x >$ y) --> on_gt;
+      ] ~default:on_lt
+
   let fsub rm x y =
     let open B in
     let extend z = extend (minimize_exponent z) 1 in
@@ -618,59 +568,53 @@ module Make(B : Theory.Basic) = struct
     let xsign,xexpn,xcoef = data (extend x) in
     let _,yexpn,ycoef = data (extend y) in
     sort xcoef >>= fun sigs' ->
-    bind xexpn (fun xexpn ->
-        bind yexpn (fun yexpn ->
-            bind xcoef (fun xcoef ->
-                bind ycoef (fun ycoef ->
-                    let match_expn ~on_equal ~xgt ~ygt =
-                      match_ [
-                        (xexpn = yexpn) --> on_equal;
-                        (xexpn >$ yexpn) --> xgt;
-                      ] ~default:ygt in
-                    let lost_bits = B.abs (xexpn - yexpn) in
-                    let expn = max xexpn yexpn in
-                    bind lost_bits (fun lost_bits ->
-                        let lost_bits =
-                          ite (is_zero lost_bits) lost_bits (lost_bits - one exps) in
-                        let loss = match_ [
-                            (is_zero lost_bits) --> zero sigs';
-                            (xexpn >$ yexpn) --> extract_last ycoef lost_bits;
-                          ] ~default:(extract_last xcoef lost_bits) in
-                        bind loss (fun loss ->
-                            let reverse = match_expn ~on_equal:(xcoef < ycoef) ~xgt:b0 ~ygt:b1 in
-                            let xcoef =
-                              match_expn ~on_equal:xcoef
-                                ~xgt:(xcoef lsl one sigs') ~ygt:(xcoef lsr lost_bits) in
-                            let ycoef =
-                              match_expn ~on_equal:ycoef
-                                ~xgt:(ycoef lsr lost_bits) ~ygt:(ycoef lsl one sigs') in
-                            let loss = invert_loss loss lost_bits in
-                            let __borrow = ite (is_zero loss) (zero sigs') (one sigs') in
-                            let borrow = one sigs' in
-                            bind borrow (fun borrow ->
-                                let coef = ite reverse
-                                    (ycoef - xcoef - borrow)
-                                    (xcoef - ycoef - borrow) in
-                                let sign = ite reverse (inv xsign) xsign in
-                                bind coef (fun coef ->
-                                    bind (msb coef) (fun msb' ->
-                                        let expn = ite msb' (succ expn) expn in
-                                        let coef = ite msb' (coef lsr one sigs') coef in
-                                        let loss' = ite msb'
-                                            (extract_last coef (one sigs'))
-                                            (zero sigs') in
-                                        let loss = ite msb'
-                                            (combine_loss loss' loss lost_bits)
-                                            loss in
-                                        let coef = unsigned sigs coef in
-                                        let lost_bits =
-                                          ite (msb coef) (succ lost_bits) lost_bits in
-                                        (* let coef = round rm sign coef loss lost_bits in *)
-                                        coef)))))))))
-
-(* with' x ~expn ~coef ~sign)))) *)
-
-
+    bind xexpn @@ fun xexpn ->
+    bind yexpn @@ fun yexpn ->
+    bind xcoef @@ fun xcoef ->
+    bind ycoef @@ fun ycoef ->
+    let match_expn ~on_equal ~on_gt ~on_lt =
+      match_cmp xexpn yexpn  ~on_equal ~on_gt ~on_lt in
+    let lost_bits = B.abs (xexpn - yexpn) in
+    let expn = max xexpn yexpn in
+    bind lost_bits @@ fun lost_bits ->
+    let lost_bits =
+      ite (is_zero lost_bits) lost_bits (lost_bits - one exps) in
+    bind lost_bits @@ fun lost_bits ->
+    let loss = match_ [
+        (is_zero lost_bits) --> zero sigs';
+        (xexpn >$ yexpn) --> extract_last ycoef lost_bits;
+      ] ~default:(extract_last xcoef lost_bits) in
+    bind loss @@ fun loss ->
+    let reverse = match_expn ~on_equal:(xcoef < ycoef) ~on_gt:b0 ~on_lt:b1 in
+    let xcoef =
+      match_expn ~on_equal:xcoef
+        ~on_gt:(xcoef lsl one sigs') ~on_lt:(xcoef lsr lost_bits) in
+    let ycoef =
+      match_expn ~on_equal:ycoef
+        ~on_gt:(ycoef lsr lost_bits) ~on_lt:(ycoef lsl one sigs') in
+    bind xcoef @@ fun xcoef ->
+    bind ycoef @@ fun ycoef ->
+    let loss = invert_loss loss lost_bits in
+    bind loss @@ fun loss ->
+    let borrow = ite (is_zero loss) (zero sigs') (one sigs') in
+    bind borrow @@ fun borrow ->
+    let coef = ite reverse
+        (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) in
+    let sign = ite reverse (inv xsign) xsign in
+    bind coef @@ fun coef ->
+    bind (msb coef) @@ fun msb' ->
+    let expn = ite msb' (succ expn) expn in
+    let coef = ite msb' (coef lsr one sigs') coef in
+    let loss' = ite msb' (extract_last coef (one sigs')) (zero sigs') in
+    bind loss' @@ fun loss' ->
+    let loss = ite msb' (combine_loss loss' loss lost_bits) loss in
+    bind loss @@ fun loss ->
+    let coef = unsigned sigs coef in
+    let lost_bits = ite (msb coef) (succ lost_bits) lost_bits in
+    bind lost_bits @@ fun lost_bits ->
+    let coef = round rm sign coef loss lost_bits in
+    (* with' x ~expn ~coef ~sign *)
+    coef
 
   (* let add_or_sub rm subtract a b =
    *     check_operands a b;
@@ -683,51 +627,6 @@ module Make(B : Theory.Basic) = struct
    *
    *    let add ?(rm=Nearest_even) = add_or_sub rm false
    *    let sub ?(rm=Nearest_even) = add_or_sub rm true *)
-
-  (* let unsafe_rshift x n =
-   *   let frac, loss = rshift_frac x.frac n in
-   *   let expn = B.(x.expn + n) in
-   *   { expn; frac }, loss *)
-
-     (* let multiply rm x y =
-      *  let extract expn frac =
-      *    let expn = B.extract ~hi:(desc.ebits - 1) expn in
-      *    let frac = B.extract ~hi:(desc.fbits - 1) frac in
-      *    expn, frac in
-      *  let extend {expn; frac} = {
-      *    expn = B.sign_extend expn desc.ebits;
-      *    frac = B.zero_extend frac desc.fbits;
-      *  } in
-      *  let x = extend x in
-      *  let y = extend y in
-      *  let expn = B.(x.expn + y.expn) in
-      *  let frac = B.(x.frac * y.frac) in
-      *  let max_expn =
-      *    B.sign_extend (max_exponent desc.ebits) desc.ebits in
-      *  let min_expn =
-      *    B.sign_extend (min_exponent desc.ebits) desc.ebits in
-      *  match align_right desc.radix desc.fbits expn frac with
-      *  | None -> `Overflow_expn
-      *  | Some (expn,frac,loss) ->
-      *    if B.is_positive expn && B.(expn > max_expn)
-      *    then `Overflow_expn
-      *    else if
-      *      B.is_positive expn then
-      *      let expn, frac = extract expn frac in
-      *      let expn = B.extract ~hi:(desc.ebits - 1) expn in
-      *      `Nice (expn,frac,loss)
-      *    else if
-      *      B.is_negative expn && B.(expn <$ min_expn) then
-      *      let dexp = B.(abs expn - abs min_expn) in
-      *      let {expn;frac=frac'}, loss' = unsafe_rshift desc.radix {expn;frac} dexp in
-      *      if B.is_zero frac' && not (B.is_zero frac) then `Underflow_expn
-      *      else
-      *        let loss' = combine_loss loss' loss in
-      *        let expn, frac = extract expn frac' in
-      *        `Nice (expn,frac',loss')
-      *    else
-      *      let expn, frac = extract expn frac in
-      *      `Nice (expn,frac,loss) *)
 
      let fmul rm x y =
        let open B in
@@ -841,5 +740,75 @@ module Make(B : Theory.Basic) = struct
    *     | Inf, Inf -> nan ~negative:true a.desc
    *     | Inf, _ -> a
    *     | _, Inf -> b *)
+
+
+     let convert : ('e, 'k) float sort -> ('a,'b) float value t ->
+                   rmode value t -> ('e, 'k) float value t =
+       fun outs input rm ->
+       sort input >>= fun fs ->
+       let iexps = Floats.exps fs in
+       let isigs = Floats.sigs fs in
+       let oexps = Floats.exps outs in
+       let osigs = Floats.sigs outs in
+       let bits = Bits.size in
+       if bits iexps = bits oexps &&
+            bits isigs = bits osigs then input
+       else failwith "unimplemented"
+
+     let sign_bits = 1
+
+     let precision_of_bits = function
+       | 16 -> 11
+       | 32 -> 24
+       | 64 -> 53
+       | 128 -> 113
+       | bits -> bits - 4 * Int.floor_log2 bits + 13
+
+     let expn_width bits = 4 * Int.floor_log2 bits - 13
+
+     let emax bits =
+       let n = bits - precision_of_bits bits - 1 in
+       (2 lsl n) - 1
+
+     let bias exps bits = B.of_int exps (emax bits)
+
+     let check bits =
+       let r = bits mod 32 in
+       if r <> 0 && r <> 16 then failwith "multiply of 32 expected"
+
+     let to_ieee vsort rm x =
+       let bits = Bits.size vsort in
+       check bits;
+       let expn_bits = expn_width bits in
+       let prec_bits = precision_of_bits bits in
+       let exps' = Bits.define expn_bits in
+       let sigs' = Bits.define prec_bits in
+       let fsort' = Floats.define exps' sigs' in
+       let y = convert fsort' x rm in
+       let expn = B.(bias exps' bits + exponent y) in
+       let sigs_ieee = Bits.define (prec_bits - 1) in
+       let coef = B.unsigned sigs_ieee (significand y) in
+       let sign = B.ite (fsign y) (B.one vsort) (B.zero vsort) in
+       let sign = B.(sign lsl of_int vsort Int.(bits - 1)) in
+       B.(concat vsort [ expn; coef] lor sign)
+
+     let of_ieee bitv rm fsort' =
+       sort bitv >>= fun insort ->
+       size bitv >>= fun bits ->
+       check bits;
+       let expn_bits = expn_width bits in
+       let prec = precision_of_bits bits in
+       let exps = Bits.define expn_bits in
+       let sigs = Bits.define prec in
+       let fsort = Floats.define exps sigs in
+       let prec_ieee = prec - 1 in
+       let coef = B.unsigned sigs bitv in
+       let leading_one = B.(one sigs lsl of_int sigs prec_ieee) in
+       let coef = B.(coef lor leading_one) in
+       let expn = B.(unsigned exps (bitv lsr of_int insort prec_ieee)) in
+       let expn = B.(expn - bias exps bits) in
+       let sign = B.msb bitv in
+       let x = finite fsort sign expn coef in
+       convert fsort' x rm
 
 end
