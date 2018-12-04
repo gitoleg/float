@@ -667,20 +667,9 @@ let sqrt_model x =
   let r = r /. 100000.0 in
   printf "model %g -> %g\n" x r
 
-let _suite () =
-  (* let y = make_float 0 2042 10000000000000 in *)
-  (* let y = make_float 0 1022 10000000000000 in
-   * let x = make_float 0 0 2 in *)
-
-  let x = make_float 0 0 2 in
-  printf "input x is %g\n" x;
-
- (* let x = make_float 0 0 2 in
-   * let y = make_float 0 0 3 in *)
+let suite () =
   "test" >::: [
-      (* "1.0 / 1.1"   >:: 1.0 / 1.1;
-       * "aaaaaaaaaa" >:: y/ x; *)
-      "bbbbbbbbbb" >:: sqrt x;
+      "bbbbbbbbbb" >:: 3.4 - 4.2;
     ]
 
 let () = run_test_tt_main (suite ())

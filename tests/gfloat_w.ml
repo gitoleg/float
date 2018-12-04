@@ -13,7 +13,8 @@ module Bignum_of_word : Bignum with type t = bignum = struct
 
   let to_string x =
     sprintf "%s:%d"
-      (Word.string_of_value ~hex:false x)
+      (Word.to_string x)
+      (* (Word.string_of_value ~hex:false x) *)
       (Word.bitwidth x)
 
   let to_int = to_int_exn

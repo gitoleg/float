@@ -1,6 +1,6 @@
 open Core_kernel
 
-let allow_output = ref false
+let allow_output = ref true
 
 let printf fmt =
   let doit str =
@@ -623,11 +623,20 @@ module Make(Bignum : Bignum) = struct
           x,y,loss, true in
     match a.data, b.data with
     | Fin x, Fin y ->
+       printf "\n";
+       printf "expns  : %s %s\n" (expn_to_str x.expn) (expn_to_str y.expn);
+       printf "input x: %s %s\n" (bs x.expn) (bs x.frac);
+       printf "input y: %s %s\n" (bs y.expn) (bs y.frac);
        let x = minimize_exponent x in
        let y = minimize_exponent y in
+       printf "minim x: %s %s\n" (bs x.expn) (bs x.frac);
+       printf "minim y: %s %s\n" (bs y.expn) (bs y.frac);
        let x = extend x (prec a) in
        let y = extend y (prec a) in
        let x,y,loss,reverse = common_ground x y in
+       printf "common x: %s %s\n" (bs x.expn) (bs x.frac);
+       printf "common y: %s %s\n" (bs y.expn) (bs y.frac);
+
        let loss = invert_loss loss in
        let borrow = if loss = ExactlyZero then
                       Bignum.zero (bits_in x.frac)
