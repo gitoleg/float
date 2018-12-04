@@ -638,16 +638,26 @@ module Make(Bignum : Bignum) = struct
        printf "common y: %s %s\n" (bs y.expn) (bs y.frac);
 
        let loss = invert_loss loss in
+       printf "lossi1 %s\n" (string_of_loss loss);
+
        let borrow = if loss = ExactlyZero then
                       Bignum.zero (bits_in x.frac)
                     else Bignum.one (bits_in x.frac) in
+       printf "borrow is %s\n" (bs borrow);
+       printf "reverse %b\n" reverse;
        let frac = if reverse then Bignum.(y.frac - x.frac - borrow)
                   else Bignum.(x.frac - y.frac - borrow) in
+       printf "frac (with borrow) %s\n" (bs frac);
+
        let sign = if reverse then revert_sign a.sign else a.sign in
        let expn,frac,loss' =
          align_right_exn ~precision:(prec a) x.expn frac in
+       printf "expn %s\n" (bs expn);
+       printf "lossi2 %s\n" (string_of_loss loss');
        let loss = if Bignum.(x.expn = expn) then loss
                   else combine_loss loss' loss in
+       printf "lossi finall %s\n" (string_of_loss loss);
+
        let frac = Bignum.extract ~hi:((prec a) - 1) frac in
        let frac = round rm sign frac loss in
        let data = Fin (norm {expn; frac}) in
