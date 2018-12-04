@@ -10,7 +10,7 @@ module G = Gfloat.Make(GE.BIL)
 
 open Knowledge.Syntax
 
-[@@warning "-3"]
+[@@@warning "-3"]
 
 let to_exp x =
   match Knowledge.run x Knowledge.empty with
@@ -19,11 +19,9 @@ let to_exp x =
      match Semantics.get GE.exp s with
      | None -> printf "none!\n"
      | Some e ->
-        printf "%s\n" (Exp.to_string e);
-        printf "eval ... \n%!";
+        (* printf "%s\n" (Exp.to_string e); *)
         match Exp.eval e with
         | Bil.Imm x ->
-           printf "evaluated!\n%!";
            printf "result: %s!\n" (Word.to_string x)
         | _ -> assert false
 
@@ -51,10 +49,9 @@ let test () =
   let y = create "0x7CE:11u" "0x10CCCCCCCCCCCD:53u" in
   let rm = G.rne in
   let z = G.fsub rm x y in
-  (* let _ze = G.exponent z in
-   * let z = G.significand z in *)
+  let _ze = G.exponent z in
+  let z = G.significand z in
   z >>| fun v -> Value.semantics v
-
 
 let enum_bits w =
   let bits = Word.(enum_bits w BigEndian) in
@@ -112,10 +109,10 @@ let test_min () =
     G.finite fsort sign expn coef in
   let x = create "0x01:11u" "0x01:53u" in
   let z = G.minimize_exponent x in
-  let z = G.significand z in
+  let z = G.exponent z in
   z >>| fun v -> Value.semantics v
 
-let res = to_exp @@ test_conv ()
+let res = to_exp @@ test ()
 
 module Clz = struct
   type bits122
