@@ -581,15 +581,13 @@ module Make(B : Theory.Basic) = struct
     bind4 xexpn yexpn xcoef ycoef @@ fun xexpn yexpn xcoef ycoef ->
     let match_expn ~on_eql ~on_gt ~on_lt =
       match_cmp xexpn yexpn  ~on_eql ~on_gt ~on_lt in
-    let expn = max xexpn yexpn - one exps in
+    max xexpn yexpn - one exps >=> fun expn ->
     abs (xexpn - yexpn) >=> fun diff ->
     ite (is_zero diff) diff (diff - one exps) >=> fun lost_bits ->
-
     match_ [
           (is_zero lost_bits) --> zero sigs';
         (xexpn >$ yexpn)    --> extract_last ycoef lost_bits;
       ] ~default:(extract_last xcoef lost_bits) >=> fun loss ->
-
     match_expn ~on_eql:(xcoef < ycoef) ~on_gt:b0 ~on_lt:b1  >=> fun reverse ->
     let xcoef =
       match_expn ~on_eql:xcoef
@@ -611,7 +609,7 @@ module Make(B : Theory.Basic) = struct
     unsigned sigs (round rm sign coef loss lost_bits) >=> fun coef ->
     let x = with' x ~expn ~coef ~sign in
     let x = minimize_exponent x in
-    exponent x
+    significand x
 
 
   (* let add_or_sub ~is_sub rm x y =

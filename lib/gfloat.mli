@@ -34,14 +34,13 @@ module Make(B : Theory.Basic) : sig
   val fadd    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t
 
   val fsub    : rmode value t -> ('e,'k) float value t
-                -> ('e,'k) float value t -> 'e bitv value t
+                -> ('e,'k) float value t -> 'k bitv value t
 
   val fmul    : rmode value t -> ('e,'k) float value t
                 -> ('e,'k) float value t -> ('e,'k) float value t
 
   val clz : 'k bitv value t ->  'k bitv value t
   val minimize_exponent: ('e,'k) float value t -> ('e,'k) float value t
-
 
   val to_ieee : 'a bitv sort -> rmode value t -> ('e,'k) float value t -> 'a bitv value t
   val of_ieee : 'a bitv value t -> rmode value t -> ('e,'k) float sort -> ('e,'k) float value t
