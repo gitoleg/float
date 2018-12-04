@@ -660,6 +660,12 @@ module Make(Bignum : Bignum) = struct
 
        let frac = Bignum.extract ~hi:((prec a) - 1) frac in
        let frac = round rm sign frac loss in
+
+       printf "before norm: expn %s, coef %s\n" (expn_to_str expn) (bs frac);
+       printf "before norm: coef: %s\n" (sb frac);
+
+       let z = norm {expn; frac} in
+       printf "after norm: expn %s, coef %s\n" (expn_to_str z.expn) (bs z.frac);
        let data = Fin (norm {expn; frac}) in
        let a = {a with data; sign} in
        if is_zero a then {a with sign = Pos} else a

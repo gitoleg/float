@@ -11,11 +11,15 @@ module Bignum_of_word : Bignum with type t = bignum = struct
   let zero_extend w width =
     Word.concat (Word.zero width) w
 
-  let to_string x =
+  let to_string' x =
     sprintf "%s:%d"
-      (Word.to_string x)
-      (* (Word.string_of_value ~hex:false x) *)
+      (Word.string_of_value ~hex:false x)
       (Word.bitwidth x)
+
+  let to_string x =
+    sprintf "%s" (Word.to_string x)
+
+
 
   let to_int = to_int_exn
   let extract ?hi ?lo w =
