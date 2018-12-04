@@ -49,8 +49,8 @@ let test () =
   let y = create "0x7CE:11u" "0x10CCCCCCCCCCCD:53u" in
   let rm = G.rne in
   let z = G.fsub rm x y in
-  let _ze = G.exponent z in
-  let z = G.significand z in
+  (* let _ze = G.exponent z in
+   * let z = G.significand z in *)
   z >>| fun v -> Value.semantics v
 
 let enum_bits w =

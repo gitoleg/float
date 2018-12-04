@@ -34,7 +34,7 @@ module Make(B : Theory.Basic) : sig
   val fadd    : rmode value t -> ('e,'k) float value t -> ('e,'k) float value t -> ('e,'k) float value t
 
   val fsub    : rmode value t -> ('e,'k) float value t
-                -> ('e,'k) float value t -> ('e,'k) float value t
+                -> ('e,'k) float value t -> 'e bitv value t
 
   val fmul    : rmode value t -> ('e,'k) float value t
                 -> ('e,'k) float value t -> ('e,'k) float value t

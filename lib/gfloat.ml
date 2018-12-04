@@ -307,29 +307,29 @@ module Make(B : Theory.Basic) = struct
       else find (pow + 1) n' in
     find 0 1
 
-  let bind exp body =
-    exp >>= fun exp ->
-    sort !!exp >>= fun s ->
+  let bind a body =
+    a >>= fun a ->
+    sort !!a >>= fun s ->
     Var.Generator.fresh s >>= fun v ->
-    B.let_ v !!exp (body (B.var v))
+    B.let_ v !!a (body (B.var v))
 
-  let bind2 exp1 exp2 body =
-    bind exp1 @@ fun exp1 ->
-    bind exp2 @@ fun exp2 ->
-    (body exp1 exp2)
+  let bind2 a b body =
+    bind a @@ fun a ->
+    bind b @@ fun b ->
+    body a b
 
-  let bind3 exp1 exp2 exp3 body =
-    bind exp1 @@ fun exp1 ->
-    bind exp2 @@ fun exp2 ->
-    bind exp3 @@ fun exp3 ->
-    (body exp1 exp2 exp3)
+  let bind3 a b c body =
+    bind a @@ fun a ->
+    bind b @@ fun b ->
+    bind c @@ fun c ->
+    body a b c
 
-  let bind4 exp1 exp2 exp3 exp4 body =
-    bind exp1 @@ fun exp1 ->
-    bind exp2 @@ fun exp2 ->
-    bind exp3 @@ fun exp3 ->
-    bind exp4 @@ fun exp4 ->
-    (body exp1 exp2 exp3 exp3)
+  let bind4 a b c d body =
+    bind a @@ fun a ->
+    bind b @@ fun b ->
+    bind c @@ fun c ->
+    bind d @@ fun d ->
+    body a b c d
 
   let clz x =
     sort x >>= fun sort ->
@@ -375,15 +375,10 @@ module Make(B : Theory.Basic) = struct
     let open B in
     sort expn >>= fun exps ->
     sort coef >>= fun sigs ->
-    (* let min_expn = min_exponent exps in
-     * let clz = clz coef in *)
-    (* let shift = umin clz (unsigned sigs (abs (expn - min_expn))) in
-     * let dexpn = umin (unsigned exps clz) (abs (expn - min_expn)) in *)
-
     let shift = possible_lshift expn coef in
     let dexpn = unsigned exps shift in
     let coef = coef lsl shift in
-    let expn = expn + dexpn in
+    let expn = expn - dexpn in
     !! (expn,coef)
 
   let with' : type e k.
@@ -422,19 +417,13 @@ module Make(B : Theory.Basic) = struct
   let prec x = Bits.size (Value.sort x)
 
   let of_bit x = !! (Value.create Bool.t x)
-
-  let is_pinf x =
-    x >>-> fun _ v ->
-    B.(and_ (inv (of_bit v.sign)) (of_bit v.is_inf))
-
-  let is_ninf x =
-    x >>-> fun _ v ->
-    B.(and_ ((of_bit v.sign)) (of_bit v.is_inf))
-
   let is_inf x = x >>-> fun _ v -> of_bit v.is_inf
   let is_snan x = x >>-> fun _ v -> of_bit v.is_snan
   let is_qnan x = x >>-> fun _ v -> of_bit v.is_qnan
   let is_nan x = B.or_ (is_snan x) (is_qnan x)
+
+  let is_pinf x = B.(and_ (inv (fsign x)) (is_inf x))
+  let is_ninf x =  B.(and_ (fsign x) (is_inf x))
 
   let is_special: ('e,'k) float value t -> bit value t = fun x ->
     B.or_ (is_nan x) (is_inf x)
@@ -484,6 +473,7 @@ module Make(B : Theory.Basic) = struct
   (* returns result sign *)
   let xor_sign s s' = B.(inv (and_ s s'))
 
+  (* TODO: consider other version *)
   let combine_loss more less =
     more >>= fun vmore ->
     less >>= fun vless ->
@@ -512,9 +502,9 @@ module Make(B : Theory.Basic) = struct
     xcoef >>= fun vxcoef ->
     let loss =
       match_ [
-          (xexpn = yexpn)  --> zero (Value.sort vxcoef);
-          (xexpn >$ yexpn) --> extract_last ycoef lost_bits;
-     ] ~default:(extract_last xcoef lost_bits)  in
+        (xexpn = yexpn)  --> zero (Value.sort vxcoef);
+        (xexpn >$ yexpn) --> extract_last ycoef lost_bits;
+      ] ~default:(extract_last xcoef lost_bits)  in
     let coef = xcoef + ycoef in
     let max_expn = max_exponent (Value.sort vexpn) in
     let is_inf = and_ (coef >= xcoef) (expn = max_expn) in
@@ -522,15 +512,15 @@ module Make(B : Theory.Basic) = struct
     let coef = match_ [
         (coef >= xcoef) --> round rm b0 coef loss lost_bits;
       ] ~default:(
-          coef >>= fun vcoef ->
-          let one = one (Value.sort vcoef) in
-          let coef,loss' = rshift_coef coef one in
-          let loss = combine_loss loss' loss in
-          let sh = of_int (Value.sort vcoef)
-              Caml.(Bits.size (Value.sort vcoef) - 1) in
-          let one = one lsl sh in
-          let coef = coef lor one in
-          round rm b0 coef loss lost_bits) in
+        coef >>= fun vcoef ->
+        let one = one (Value.sort vcoef) in
+        let coef,loss' = rshift_coef coef one in
+        let loss = combine_loss loss' loss in
+        let sh = of_int (Value.sort vcoef)
+            Caml.(Bits.size (Value.sort vcoef) - 1) in
+        let one = one lsl sh in
+        let coef = coef lor one in
+        round rm b0 coef loss lost_bits) in
     with' x ~expn ~coef ~is_inf
 
   let extend x addend =
@@ -577,6 +567,8 @@ module Make(B : Theory.Basic) = struct
         (x >$ y) --> on_gt;
       ] ~default:on_lt
 
+  let (>=>) = bind
+
   let fsub rm x y =
     let open B in
     let extend z = extend (minimize_exponent z) 1 in
@@ -589,18 +581,16 @@ module Make(B : Theory.Basic) = struct
     bind4 xexpn yexpn xcoef ycoef @@ fun xexpn yexpn xcoef ycoef ->
     let match_expn ~on_eql ~on_gt ~on_lt =
       match_cmp xexpn yexpn  ~on_eql ~on_gt ~on_lt in
-    let lost_bits = B.abs (xexpn - yexpn) in
-    let expn = max xexpn yexpn in
-    bind lost_bits @@ fun lost_bits ->
-    let lost_bits =
-      ite (is_zero lost_bits) lost_bits (lost_bits - one exps) in
-    bind lost_bits @@ fun lost_bits ->
-    let loss = match_ [
-        (is_zero lost_bits) --> zero sigs';
+    let expn = max xexpn yexpn - one exps in
+    abs (xexpn - yexpn) >=> fun diff ->
+    ite (is_zero diff) diff (diff - one exps) >=> fun lost_bits ->
+
+    match_ [
+          (is_zero lost_bits) --> zero sigs';
         (xexpn >$ yexpn)    --> extract_last ycoef lost_bits;
-      ] ~default:(extract_last xcoef lost_bits) in
-    bind loss @@ fun loss ->
-    let reverse = match_expn ~on_eql:(xcoef < ycoef) ~on_gt:b0 ~on_lt:b1 in
+      ] ~default:(extract_last xcoef lost_bits) >=> fun loss ->
+
+    match_expn ~on_eql:(xcoef < ycoef) ~on_gt:b0 ~on_lt:b1  >=> fun reverse ->
     let xcoef =
       match_expn ~on_eql:xcoef
         ~on_gt:(xcoef lsl one sigs') ~on_lt:(xcoef lsr lost_bits) in
@@ -608,26 +598,21 @@ module Make(B : Theory.Basic) = struct
       match_expn ~on_eql:ycoef
         ~on_gt:(ycoef lsr lost_bits) ~on_lt:(ycoef lsl one sigs') in
     bind2 xcoef ycoef @@ fun xcoef ycoef ->
-    let loss = invert_loss loss lost_bits in
-    bind loss @@ fun loss ->
-    let borrow = ite (is_zero loss) (zero sigs') (one sigs') in
-    bind borrow @@ fun borrow ->
-    let coef = ite reverse
-        (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) in
-    let sign = ite reverse (inv xsign) xsign in
-    bind coef @@ fun coef ->
-    bind (msb coef) @@ fun msb' ->
-    let expn = ite msb' (succ expn) expn in
-    let coef = ite msb' (coef lsr one sigs') coef in
-    let loss' = ite msb' (extract_last coef (one sigs')) (zero sigs') in
-    bind loss' @@ fun loss' ->
-    let loss = ite msb' (combine_loss loss' loss lost_bits) loss in
-    bind loss @@ fun loss ->
-    let coef = unsigned sigs coef in
-    let lost_bits = ite (msb coef) (succ lost_bits) lost_bits in
-    bind lost_bits @@ fun lost_bits ->
-    let coef = round rm sign coef loss lost_bits in
-    with' x ~expn ~coef ~sign
+    invert_loss loss lost_bits >=> fun loss ->
+    ite (is_zero loss) (zero sigs') (one sigs') >=> fun borrow ->
+    abs (xcoef - ycoef) - borrow  >=> fun coef ->
+    ite reverse (inv xsign) xsign >=> fun sign ->
+    msb coef >=> fun msb' ->
+    ite msb' (succ expn) expn >=> fun expn ->
+    ite msb' (coef lsr one sigs') coef >=> fun coef ->
+    ite msb' (extract_last coef (one sigs')) (zero sigs') >=> fun loss' ->
+    ite msb' (combine_loss loss' loss lost_bits) loss >=> fun loss ->
+    ite (msb coef) (succ lost_bits) lost_bits >=> fun lost_bits ->
+    unsigned sigs (round rm sign coef loss lost_bits) >=> fun coef ->
+    let x = with' x ~expn ~coef ~sign in
+    let x = minimize_exponent x in
+    exponent x
+
 
   (* let add_or_sub ~is_sub rm x y =
    *   let ( lxor ) = xor_sign in
