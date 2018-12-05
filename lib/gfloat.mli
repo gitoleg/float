@@ -28,6 +28,7 @@ module type Bignum = sig
   val ( = ) : t -> t -> bool
   val ( < ) : t -> t -> bool
   val ( lsl ) : t -> int -> t
+  val ( lor ) : t -> t -> t
   val ( lxor ) : t -> t -> t
   val lnot : t -> t
   val neg : t -> t

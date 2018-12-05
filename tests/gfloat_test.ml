@@ -669,7 +669,7 @@ let sqrt_model x =
 
 let suite () =
   "test" >::: [
-      "bbbbbbbbbb" >:: 3.4 - 4.2;
+      "bbbbbbbbbb" >:: 2.0 / 2.4;
     ]
 
 let () = run_test_tt_main (suite ())
