@@ -12,18 +12,32 @@ open Knowledge.Syntax
 
 [@@@warning "-3"]
 
-let to_exp x =
+let eval x =
+  let x = x >>| Value.semantics in
   match Knowledge.run x Knowledge.empty with
   | Error _ -> assert false
   | Ok (s,_) ->
      match Semantics.get GE.exp s with
-     | None -> printf "none!\n"
+     | None -> printf "none!\n"; None
      | Some e ->
         (* printf "%s\n" (Exp.to_string e); *)
         match Exp.eval e with
-        | Bil.Imm x ->
-           printf "result: %s!\n" (Word.to_string x)
+        | Bil.Imm w -> Some w
         | _ -> assert false
+
+let float_result x =
+  let e = eval (G.exponent x) in
+  let s = eval (G.significand x) in
+  match e,s with
+  | Some e, Some s ->
+     printf "result %s %s\n"
+       (Word.to_string e) (Word.to_string s)
+  | _ -> printf "fail!\n"
+
+let result x =
+  match eval x with
+  | Some e -> printf "result %s\n" (Word.to_string e)
+  | _ -> printf "fail!\n"
 
 type bits11
 type bits53
@@ -51,7 +65,7 @@ let test () =
   let z = G.fsub rm x y in
   (* let _ze = G.exponent z in
    * let z = G.significand z in *)
-  z >>| fun v -> Value.semantics v
+  float_result z
 
 let enum_bits w =
   let bits = Word.(enum_bits w BigEndian) in
@@ -61,12 +75,12 @@ let enum_bits w =
     Seq.drop bits (b_len - w_len)
   else bits
 
-  let string_of_bits w =
-    let bits = enum_bits w in
-    let (@@) = sprintf "%s%d" in
-    Seq.fold bits ~init:"" ~f:(fun s x ->
-        if x then s @@ 1
-        else s @@ 0)
+let string_of_bits w =
+  let bits = enum_bits w in
+  let (@@) = sprintf "%s%d" in
+  Seq.fold bits ~init:"" ~f:(fun s x ->
+      if x then s @@ 1
+      else s @@ 0)
 
 let string_of_bits64 x =
   let w = Word.of_int64 (Int64.bits_of_float x) in
@@ -99,7 +113,7 @@ let test_conv () =
   let bs = create bitv bits in
   let x = G.of_ieee bs G.rne fsort in
   let y = G.to_ieee bitv G.rne x in
-  y >>| fun v -> Value.semantics v
+  result y
 
 let test_min () =
   let create expn coef =
@@ -110,9 +124,9 @@ let test_min () =
   let x = create "0x01:11u" "0x01:53u" in
   let z = G.minimize_exponent x in
   let z = G.exponent z in
-  z >>| fun v -> Value.semantics v
+  result z
 
-let res = to_exp @@ test ()
+let res = test ()
 
 module Clz = struct
   type bits122
@@ -122,7 +136,7 @@ module Clz = struct
     let x = Word.of_int64 ~width:122 0x4L in
     let x = create sigs x in
     let y = G.clz x in
-    y >>| fun y -> Value.semantics y
+    result y
 
-  let res () = to_exp @@ test_clz ()
+  let res () = test_clz ()
 end

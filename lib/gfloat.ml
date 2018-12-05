@@ -577,39 +577,52 @@ module Make(B : Theory.Basic) = struct
     let exps = Floats.exps fsort in
     let xsign,xexpn,xcoef = data (extend x) in
     let _,yexpn,ycoef = data (extend y) in
+    let expn_eql = B.zero exps in
+    let xexpn_gt = B.one exps in
+    let yexpn_gt = B.ones exps in
+    let cmp_expn = bind2 xexpn yexpn @@ fun xe ye ->
+      match_ [
+          (xe >$ ye) --> xexpn_gt;
+          (ye >$ xe) --> yexpn_gt;
+       ] ~default:expn_eql in
+    let match_expn ~on_eql ~on_xgt ~on_ygt =
+      match_ [
+          (cmp_expn = xexpn_gt) --> on_xgt;
+          (cmp_expn = yexpn_gt) --> on_ygt;
+        ] ~default:on_eql in
     sort xcoef >>= fun sigs' ->
-    bind4 xexpn yexpn xcoef ycoef @@ fun xexpn yexpn xcoef ycoef ->
-    let match_expn ~on_eql ~on_gt ~on_lt =
-      match_cmp xexpn yexpn  ~on_eql ~on_gt ~on_lt in
-    max xexpn yexpn - one exps >=> fun expn ->
-    abs (xexpn - yexpn) >=> fun diff ->
-    ite (is_zero diff) diff (diff - one exps) >=> fun lost_bits ->
-    match_ [
-          (is_zero lost_bits) --> zero sigs';
-        (xexpn >$ yexpn)    --> extract_last ycoef lost_bits;
-      ] ~default:(extract_last xcoef lost_bits) >=> fun loss ->
-    match_expn ~on_eql:(xcoef < ycoef) ~on_gt:b0 ~on_lt:b1  >=> fun reverse ->
-    let xcoef =
-      match_expn ~on_eql:xcoef
-        ~on_gt:(xcoef lsl one sigs') ~on_lt:(xcoef lsr lost_bits) in
-    let ycoef =
-      match_expn ~on_eql:ycoef
-        ~on_gt:(ycoef lsr lost_bits) ~on_lt:(ycoef lsl one sigs') in
-    bind2 xcoef ycoef @@ fun xcoef ycoef ->
-    invert_loss loss lost_bits >=> fun loss ->
-    ite (is_zero loss) (zero sigs') (one sigs') >=> fun borrow ->
-    abs (xcoef - ycoef) - borrow  >=> fun coef ->
-    ite reverse (inv xsign) xsign >=> fun sign ->
-    msb coef >=> fun msb' ->
-    ite msb' (succ expn) expn >=> fun expn ->
-    ite msb' (coef lsr one sigs') coef >=> fun coef ->
-    ite msb' (extract_last coef (one sigs')) (zero sigs') >=> fun loss' ->
-    ite msb' (combine_loss loss' loss lost_bits) loss >=> fun loss ->
-    ite (msb coef) (succ lost_bits) lost_bits >=> fun lost_bits ->
-    unsigned sigs (round rm sign coef loss lost_bits) >=> fun coef ->
-    let x = with' x ~expn ~coef ~sign in
-    let x = minimize_exponent x in
-    significand x
+    let lost_bits = bind (B.abs (xexpn - yexpn)) @@ fun diff ->
+      ite (is_zero diff) diff (diff - one exps) in
+    let loss =
+      bind3 xcoef ycoef lost_bits @@ fun xcoef ycoef lost_bits ->
+       let loss = match_expn ~on_eql:(zero sigs')
+         ~on_xgt:(extract_last ycoef lost_bits)
+         ~on_ygt:(extract_last xcoef lost_bits) in
+         invert_loss loss lost_bits in
+    let reverse = match_expn ~on_eql:(xcoef < ycoef) ~on_xgt:b0 ~on_ygt:b1 in
+    let sign = ite reverse (inv xsign) xsign in
+    let coef =
+      bind4 xcoef ycoef loss lost_bits @@ fun xcoef ycoef loss lost_bits ->
+      let xcoef =
+        match_expn ~on_eql:xcoef
+          ~on_xgt:(xcoef lsl one sigs') ~on_ygt:(xcoef lsr lost_bits) in
+      let ycoef =
+        match_expn ~on_eql:ycoef
+          ~on_xgt:(ycoef lsr lost_bits) ~on_ygt:(ycoef lsl one sigs') in
+      let borrow = ite (is_zero loss) (zero sigs') (one sigs') in
+      ite reverse (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) in
+    let expn = bind2 (msb coef) (max xexpn yexpn) @@ fun msb expn ->
+      let expn = max xexpn yexpn - one exps in
+      ite msb (succ expn) expn in
+    let coef = bind3 coef loss lost_bits @@ fun coef loss lost_bits ->
+      let msb = msb coef in
+      let coef = ite msb (coef lsr one sigs') coef in
+      let loss' = ite msb (extract_last coef (one sigs')) (zero sigs') in
+      let loss = ite msb (combine_loss loss' loss lost_bits) loss in
+      let coef = unsigned sigs coef in
+      let lost_bits = ite msb  (succ lost_bits) lost_bits in
+      round rm sign coef loss lost_bits in
+    minimize_exponent (with' x ~expn ~coef ~sign)
 
 
   (* let add_or_sub ~is_sub rm x y =
