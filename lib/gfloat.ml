@@ -691,25 +691,28 @@ module Make(B : Theory.Basic) = struct
       let shf = B.of_int sort i in
       B.(uno lsl shf) in
     sort x >>= fun fsort ->
-    precision x >>= fun prec ->
     let sign = xor_sign (fsign x) (fsign y) in
     let x' = extend x in
     let y' = extend y in
+    precision x' >>= fun prec ->
     sort (significand x') >>= fun sigs ->
+    let lost_alot = B.of_int sigs 0b11 in
+    let lost_half = B.of_int sigs 0b10 in
+    let lost_zero = B.of_int sigs 0b00 in
+    let lost_afew = B.of_int sigs 0b01 in
+    let lost_bits = B.of_int sigs 2    in
     let rec eval_res i masks nomin denom =
       if i < 0 then
         List.fold masks ~f:B.(lor) ~init:(B.zero sigs) >=> fun coef ->
         let loss = match_ B.[
-            (nomin > denom) --> of_int sigs 0b11;
-            (nomin = denom) --> of_int sigs 0b10;
-            (nomin = zero sigs) --> of_int sigs 0b00;
-         ] ~default:(B.of_int sigs 0b01) in
-        round rm sign coef loss (B.of_int sigs 2)
+            (nomin > denom) --> lost_alot;
+            (nomin = denom) --> lost_half;
+            (nomin = zero sigs) --> lost_zero;
+         ] ~default:lost_afew in
+        round rm sign coef loss lost_bits
       else
-        let next_nomin =
-          B.((ite (nomin > denom) (nomin - denom) nomin)) in
-        let mask =
-          B.(ite (nomin > denom) (mask_of_i sigs i) (B.zero sigs)) in
+        let next_nomin = B.(ite (nomin > denom) (nomin - denom) nomin) in
+        let mask = B.(ite (nomin > denom) (mask_of_i sigs i) (B.zero sigs)) in
         let masks = mask :: masks in
         bind next_nomin (fun next_nomin ->
         eval_res (i - 1) masks B.(next_nomin lsl one sigs) denom)  in
