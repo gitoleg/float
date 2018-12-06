@@ -681,47 +681,44 @@ module Make(B : Theory.Basic) = struct
               ite (is_zero coef) min expn in
     with' x ~expn ~coef ~sign ~is_inf
 
-  let setbit x i =
-    sort x >>= fun sort ->
-    let uno = B.one sort in
-    let shf = B.of_int sort (i - 1) in
-    B.((uno lsl shf) lor x)
-
-  let fdiv rn x y =
+  let fdiv rm x y =
     let extend z =
       z >>= fun z ->
       minimize_exponent !!z >>= fun z ->
       extend !!z 1 in
+    let mask_of_i sort i =
+      let uno = B.one sort in
+      let shf = B.of_int sort i in
+      B.(uno lsl shf) in
     sort x >>= fun fsort ->
     precision x >>= fun prec ->
+    let sign = xor_sign (fsign x) (fsign y) in
     let x' = extend x in
     let y' = extend y in
     sort (significand x') >>= fun sigs ->
-
-    let mask_of_i i =
-      let uno = B.one sigs in
-      let shf = B.of_int sigs (i - 1) in
-      B.(uno lsl shf) in
-
-    let rec eval_res i nomin denom res =
-      if i < 0 then res
+    let rec eval_res i masks nomin denom =
+      if i < 0 then
+        List.fold masks ~f:B.(lor) ~init:(B.zero sigs) >=> fun coef ->
+        let loss = match_ B.[
+            (nomin > denom) --> of_int sigs 0b11;
+            (nomin = denom) --> of_int sigs 0b10;
+            (nomin = zero sigs) --> of_int sigs 0b00;
+         ] ~default:(B.of_int sigs 0b01) in
+        round rm sign coef loss (B.of_int sigs 2)
       else
         let next_nomin =
-          B.(ite (nomin > denom) (nomin - denom) nomin) >=> fun n ->
-          B.(n lsl one sigs) in
-        let next_res = B.(ite (nomin > denom) (setbit res i) res) in
-        bind next_res (fun res' ->
-         bind next_nomin (fun nomin' ->
-          eval_res (i - 1)  nomin' denom res')) in
+          B.((ite (nomin > denom) (nomin - denom) nomin)) in
+        let mask =
+          B.(ite (nomin > denom) (mask_of_i sigs i) (B.zero sigs)) in
+        let masks = mask :: masks in
+        bind next_nomin (fun next_nomin ->
+        eval_res (i - 1) masks B.(next_nomin lsl one sigs) denom)  in
     let coef =
       significand x' >=> fun nomin ->
       significand y' >=> fun denom ->
-      eval_res (prec - 1) nomin denom (B.zero sigs) in
-
-    let coef = B.unsigned (Floats.sigs fsort) coef in
-    let ex = exponent x in
-    let ey = exponent y in
-    let expn = B.(ex - ey) in
+      eval_res (prec  - 1 ) [] nomin denom >=> fun coef ->
+      B.unsigned (Floats.sigs fsort) coef in
+    let expn = B.(exponent x - exponent y) in
     with' x ~expn ~coef
 
   let narrowing_convert outs input rm =

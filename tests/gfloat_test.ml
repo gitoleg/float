@@ -24,7 +24,7 @@ let eval x =
      match Semantics.get GE.exp s with
      | None -> printf "none!\n"; None
      | Some e ->
-        printf "%s\n" (Exp.to_string e);
+        (* printf "%s\n" (Exp.to_string e); *)
         match Exp.eval e with
         | Bil.Imm w -> Some w
         | _ -> assert false
