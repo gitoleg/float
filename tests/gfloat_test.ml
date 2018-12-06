@@ -61,6 +61,7 @@ let normalize_ieee biased_expn frac =
   let bias = double_bias in
   let min_expn = 1 in
   let max_expn = bias * 2 in
+  printf "norm: expn %d\n" biased_expn;
   let rec norm_expn expn frac =
     if expn = 0 then expn,frac
     else if Int.(expn > max_expn) then
@@ -84,6 +85,7 @@ let normalize_ieee biased_expn frac =
   if biased_expn = 0 then biased_expn,frac
   else
     let expn, frac = norm_expn biased_expn frac in
+    printf "normed: expn %d\n" expn;
     norm_frac expn frac
 
 let sign_bit t bits =
@@ -107,13 +109,20 @@ let float_of_double t =
   if is_zero t then if is_neg t then ~-. 0.0 else 0.0
   else if is_fin t then
     let (expn, frac) = Option.value_exn (fin t) in
+    printf "frac1 %s\n" (Word.to_string frac);
     let expn = Word.signed expn in
     let expn = Word.to_int_exn expn in
+    printf "expn1 %d\n" expn;
     let frac = Word.to_int64_exn frac in
+    printf "frac2 : %Lx\n" frac;
     let expn = double_bias + expn in
+    printf "expn2 %d\n" expn;
     let dexpn = if expn = 0 then 0 else 52 in
+    printf "dexpn %d\n" dexpn;
     let expn = expn + dexpn in
     let expn,frac = normalize_ieee expn frac in
+    printf "frac3 : %Lx\n" frac;
+    printf "expn3 : %d\n" expn;
     let frac = drop_hd frac in
     let expn = Int64.of_int expn in
     let r = int64_of_bits (is_neg t) expn frac in
@@ -666,6 +675,10 @@ let sqrt_model x =
   let r = loop 0 (y /. 2.0) in
   let r = r /. 100000.0 in
   printf "model %g -> %g\n" x r
+
+let () = Debug.deconstruct64 2.0
+let () = Debug.deconstruct64 2.4
+let () = Debug.deconstruct64 (2.0 /. 2.4)
 
 let suite () =
   "test" >::: [

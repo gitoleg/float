@@ -823,32 +823,45 @@ module Make(Bignum : Bignum) = struct
     | _, Inf -> b
 
 
-  let long_div a b =
+  let long_div ?(rm=Nearest_even) a b =
     match a.data,b.data with
     | Fin x, Fin y ->
-       let x = minimize_exponent x in
-       let y = maximize_exponent y in
+       printf "input x %s %s\n" (expn_to_str x.expn) (expn_to_str x.frac);
+       printf "input y %s %s\n" (expn_to_str y.expn) (expn_to_str y.frac);
+       let x = extend x 1 in
+       let y = extend y 1 in
+       let sign = xor_sign a.sign b.sign in
+       let prec = a.desc.fbits + 1 in
        let expn = Bignum.(x.expn - y.expn) in
-       let rec loop i nom denom res rem =
-         if i < 0 then res,rem
+       let denom = y.frac in
+       let rec loop i nom res =
+         if i < 0 then nom,res
          else
-           let rem = Bignum.(rem lsl 1) in
-           let rem =
-             if Bignum.testbit nom i then Bignum.set_bit rem 0
-             else rem in
-           let res, rem =
-             if Bignum.(rem >= denom) then
-               let rem = Bignum.(rem - denom) in
+           let nom, res =
+             if Bignum.(nom >= denom) then
+               let nom = Bignum.(nom - denom) in
                let res = Bignum.set_bit res i in
-               res,rem
-             else res, rem in
-           loop (i - 1) nom denom res rem in
-       let res = Bignum.zero a.desc.fbits in
-       let rem = Bignum.zero a.desc.fbits in
-       let res,rem = loop (a.desc.fbits - 1) x.frac y.frac res rem in
+               nom,res
+             else nom,res in
+           let nom = Bignum.(nom lsl 1) in
+           loop (i - 1) nom res in
+       let nom,res = loop (prec - 1) x.frac (Bignum.zero prec) in
+       let loss =
+         if Bignum.(nom > denom) then MoreThanHalf
+         else if Bignum.(nom = denom) then ExactlyHalf
+         else if Bignum.is_zero nom then ExactlyZero
+         else LessThanHalf in
+       printf "res is %s\n" (sb res);
+       let res = round rm sign res loss in
+       let res = Bignum.extract ~hi:(a.desc.fbits - 1) res in
        let data = { expn; frac=res } in
+       let () = printf "final: expn %s, coef %s\n" (expn_to_str expn) (bs data.frac) in
+       let data = norm data in
        {a with data = Fin data;  }
     | _ -> failwith "not interesting"
+
+
+  let div = long_div
 
   let truncate ?(rm=Nearest_even) ~upto a = match a.data with
     | Fin {expn; frac} ->
