@@ -39,6 +39,9 @@ module Make(B : Theory.Basic) : sig
   val fmul    : rmode value t -> ('e,'k) float value t
                 -> ('e,'k) float value t -> ('e,'k) float value t
 
+  val fdiv    : rmode value t -> ('e,'k) float value t
+                -> ('e,'k) float value t -> ('e,'k) float value t
+
   val clz : 'k bitv value t ->  'k bitv value t
   val minimize_exponent: ('e,'k) float value t -> ('e,'k) float value t
 

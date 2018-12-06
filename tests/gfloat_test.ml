@@ -24,7 +24,7 @@ let eval x =
      match Semantics.get GE.exp s with
      | None -> printf "none!\n"; None
      | Some e ->
-        (* printf "%s\n" (Exp.to_string e); *)
+        printf "%s\n" (Exp.to_string e);
         match Exp.eval e with
         | Bil.Imm w -> Some w
         | _ -> assert false
@@ -130,7 +130,7 @@ let binop op x y ctxt =
        | `Add -> G.fadd
        | `Sub -> G.fsub
        | `Mul -> G.fmul
-       | `Div -> failwith "unimplemented" in
+       | `Div -> G.fdiv in
   let x' = of_float x in
   let y' = of_float y in
   let z = f G.rne x' y' in
@@ -143,6 +143,7 @@ let binop op x y ctxt =
 let ( - ) : test = binop `Sub
 let ( + ) : test = binop `Add
 let ( * ) : test = binop `Mul
+let ( / ) : test = binop `Div
 
 
 let suite () =
@@ -171,17 +172,20 @@ let suite () =
        * "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151; *)
 
       (* mul *)
-      "1.0 * 2.5"    >:: 1.0 * 2.5;
-      "2.5 * 0.5"    >:: 2.5 * 0.5;
-      "4.2 * 3.4"    >:: 4.2 * 3.4;
-      "0.01 * 0.02"  >:: 0.01 * 0.02;
-      "1.0 * 0.5"    >:: 1.0 * 0.5;
-      "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
-      "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
-      "0.0 * 0.0"    >:: 0.0 * 0.0;
-      "0.0 * 0.1738" >:: 0.0 * 0.1738;
+      (* "1.0 * 2.5"    >:: 1.0 * 2.5;
+       * "2.5 * 0.5"    >:: 2.5 * 0.5;
+       * "4.2 * 3.4"    >:: 4.2 * 3.4;
+       * "0.01 * 0.02"  >:: 0.01 * 0.02;
+       * "1.0 * 0.5"    >:: 1.0 * 0.5;
+       * "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
+       * "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+       * "0.0 * 0.0"    >:: 0.0 * 0.0;
+       * "0.0 * 0.1738" >:: 0.0 * 0.1738; *)
 
-  ]
+      (* div *)
+      "2.0 / 2.4"    >:: 2.0 / 2.4;
+
+    ]
 
 let float_result = print_result ~pref:"result"
 
@@ -239,8 +243,8 @@ let test_min () =
   let z = G.exponent z in
   result z
 
-let res = deconstruct 4.2
-let res = test ()
+let res () = deconstruct 4.2
+let res () = test ()
 let () = run_test_tt_main (suite ())
 
 module Clz = struct
