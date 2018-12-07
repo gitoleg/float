@@ -22,7 +22,7 @@ let eval x =
   | Error _ -> assert false
   | Ok (s,_) ->
      match Semantics.get GE.exp s with
-     | None -> printf "none!\n"; None
+     | None -> printf "Semantics.get: none!\n"; None
      | Some e ->
         (* printf "%s\n" (Exp.to_string e); *)
         match Exp.eval e with
@@ -172,22 +172,24 @@ let suite () =
       "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151;
 
       (* mul *)
-      (* "1.0 * 2.5"    >:: 1.0 * 2.5;
-       * "2.5 * 0.5"    >:: 2.5 * 0.5;
-       * "4.2 * 3.4"    >:: 4.2 * 3.4;
-       * "0.01 * 0.02"  >:: 0.01 * 0.02;
-       * "1.0 * 0.5"    >:: 1.0 * 0.5;
-       * "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
-       * "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
-       * "0.0 * 0.0"    >:: 0.0 * 0.0;
-       * "0.0 * 0.1738" >:: 0.0 * 0.1738; *)
+      "1.0 * 2.5"    >:: 1.0 * 2.5;
+      "2.5 * 0.5"    >:: 2.5 * 0.5;
+      "4.2 * 3.4"    >:: 4.2 * 3.4;
+      "0.01 * 0.02"  >:: 0.01 * 0.02;
+      "1.0 * 0.5"    >:: 1.0 * 0.5;
+      "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
+      "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
 
       (* div *)
-      (* "2.0 / 2.4"    >:: 2.0 / 2.4;
-       * "2.0 * 2.4"    >:: 2.0 * 2.4;
-       * "2.0 - 2.4"    >:: 2.0 - 2.4; *)
-      (* "2.0 + 2.4"    >:: 2.0 + 2.4; *)
-      "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
+      "2.0 / 0.5"   >:: 2.0 / 0.5;
+      "1.0 / 3.0"   >:: 1.0 / 3.0;
+      "3.0 / 32.0"  >:: 3.0 / 32.0;
+      "42.3 / 0.0"  >:: 42.3 / 0.0;
+      "324.32423 / 1.2" >:: 324.32423 / 1.2;
+      "2.4 / 3.123131"  >:: 2.4 / 3.123131;
+      "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
+      "9991132.2131363434 / 2435.05656549151" >:: 9991132.2131363434 / 2435.05656549151;
+
     ]
 
 let float_result = print_result ~pref:"result"
@@ -196,23 +198,6 @@ let result x =
   match eval x with
   | Some e -> printf "result %s\n" (Word.to_string e)
   | _ -> printf "fail!\n"
-
-let test () =
-  let create expn coef =
-    let sign = GE.Basic.b0 in
-    let expn = knowledge_of_word exps (Word.of_string expn) in
-    let coef = knowledge_of_word sigs (Word.of_string coef) in
-    G.finite fsort sign expn coef in
-  let x = of_float 4.2 in
-  print_result ~pref:"created x:"  x;
-
-  let y = x in
-
-  (* let x = create "0x7CE:11u" "0x10CCCCCCCCCCCD:53u" in
-   * let y = create "0x7CD:11u" "0x123D70A3D70A3D:53u" in *)
-  let rm = G.rne in
-  let z = G.fsub rm x y in
-  float_result z
 
 let deconstruct x =
   let wi = Word.to_int_exn in
@@ -246,13 +231,11 @@ let test_min () =
   let z = G.exponent z in
   result z
 
-let test_sub () =
-  let x = of_float 123213123.23434 in
-  let y = of_float 56757.05656549151 in
-  let z = G.test G.rne x y in
-  result z
+let test () =
+  let x = of_float 5.0 in
+  float_result x
 
-let () = test_sub ()
+let a () = test ()
 let () = run_test_tt_main (suite ())
 
 module Clz = struct
