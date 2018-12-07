@@ -765,100 +765,93 @@ module Make(B : Theory.Basic) = struct
         input
       else if is_narrowing then narrowing_convert outs input rm
       else if is_extending then extending_convert outs input
-      else
-        let () = printf "convert %d %d --> %d %d\n"
-                   expn_bits coef_bits expn_bits' coef_bits' in
-        failwith "don't know what to do"
+      else B.unk fs
 
-  let sign_bits = 1
+  open Ieee754
 
-  (* precision acording to ieee754, with all bits included *)
-  let precision_of_bits = function
-    | 16 -> 11
-    | 32 -> 24
-    | 64 -> 53
-    | 128 -> 113
-    | bits -> bits - 4 * Int.floor_log2 bits + 13
+  let match_ cases ~default =
+    let cases = List.rev cases in
+    List.fold cases ~init:default
+      ~f:(fun fin (cond, ok) -> B.ite cond ok fin)
 
-  let expn_width bits = 4 * Int.floor_log2 bits - 13
+  let fmt_of_bits bits = IEEE754.create bits
 
-  (* check *)
-  let emax bits =
-    let n = bits - precision_of_bits bits - sign_bits  in
-    (2 lsl (n - 1)) - 1
+  let sort_of_fmt fmt =
+    let exps = Bits.define fmt.IEEE754.w in
+    let sigs = Bits.define fmt.IEEE754.p in
+    Floats.define exps sigs
 
-  let bias exps bits =
-    B.of_int exps (emax bits)
+  let bias exps fmt = B.of_int exps fmt.IEEE754.bias
 
-  let check bits =
-    let r = bits mod 32 in
-    if r <> 0 && r <> 16 then failwith "multiply of 32 expected"
+  let bind a body =
+    a >>= fun a ->
+    sort !!a >>= fun s ->
+    Var.Generator.fresh s >>= fun v ->
+    B.let_ v !!a (body (B.var v))
+
+  let (>=>) = bind
 
   let to_ieee vsort rm x =
-    x >>= fun x ->
-    let x = !! x in
     let bits = Bits.size vsort in
-    check bits;
-    let expn_bits = expn_width bits in
-    let prec_bits = precision_of_bits bits in
-    let prec_ieee = prec_bits - 1 in
-    let exps' = Bits.define expn_bits in
-    let sigs' = Bits.define prec_bits in
-    let fsort'= Floats.define exps' sigs' in
-    convert fsort' x rm >>= fun x ->
-    let x = !!x in
-    let (||) = B.or_ in
-    let (&&) = B.and_ in
-    let is_inf = is_pinf x || is_ninf x in
-    let is_nan = is_snan x || is_qnan x in
-    let expn =
-      B.(bias exps' bits + exponent x) >=> fun expn ->
-        B.(ite (is_zero expn) (B.zero exps') (of_int exps' prec_ieee)) >=> fun dexpn ->
-          B.(expn + dexpn) >=> fun expn ->
-            B.ite (is_nan || is_inf) (B.ones exps') expn in
-    let sigs_ieee = Bits.define prec_ieee in
-    let coef =
-      B.unsigned sigs_ieee (significand x) >=> fun coef ->
-        match_ B.[
-            is_inf --> B.zero sigs_ieee;
-            (is_nan && B.is_zero coef) --> coef;
-            is_nan --> coef;
-          ] ~default:coef in
-    let sign = B.ite (fsign x) (B.one vsort) (B.zero vsort) in
-    let sign = B.(sign lsl of_int vsort Int.(bits - 1)) in
-    B.(concat vsort [ expn; coef] lor sign)
+    match IEEE754.create bits with
+    | None -> B.unk vsort
+    | Some fmt ->
+      let fsort = sort_of_fmt fmt in
+      convert fsort x rm >>= fun x ->
+      let x = !!x in
+      let exps = Floats.exps fsort in
+      let sigs = Floats.sigs fsort in
+      let (||) = B.or_ in
+      let (&&) = B.and_ in
+      let is_inf = is_pinf x || is_ninf x in
+      let is_nan = is_snan x || is_qnan x in
+      let p_1 = Bits.size sigs - 1 in
+      let expn =
+        B.(bias exps fmt + exponent x) >=> fun expn ->
+          B.(ite (is_zero expn) (zero exps) (of_int exps p_1)) >=> fun dexpn ->
+            B.(expn + dexpn) >=> fun expn ->
+              B.ite (is_nan || is_inf) (B.ones exps) expn in
+      let sigs_ieee = Bits.define p_1 in
+      let coef =
+        B.low sigs_ieee (significand x) >=> fun coef ->
+          match_ B.[
+              is_inf --> B.zero sigs_ieee;
+              (is_nan && B.is_zero coef) --> coef;
+              is_nan --> coef;
+            ] ~default:coef in
+      let sign = B.ite (fsign x) (B.one vsort) (B.zero vsort) in
+      let sign = B.(sign lsl of_int vsort Int.(bits - 1)) in
+      B.(concat vsort [ expn; coef] lor sign)
 
   let of_ieee bitv rm fsort' =
-    bitv >>= fun bitv ->
-    let bitv = !!bitv in
     sort bitv >>= fun insort ->
     size bitv >>= fun bits ->
-    check bits;
-    let expn_bits = expn_width bits in
-    let prec_bits = precision_of_bits bits in
-    let prec_ieee = prec_bits - 1 in
-    let exps = Bits.define expn_bits in
-    let sigs = Bits.define prec_bits in
-    let fsort = Floats.define exps sigs in
-    let coef =
-      B.unsigned sigs bitv >=> fun coef ->
-        B.(one sigs lsl of_int sigs prec_ieee) >=> fun leading_one ->
-          B.(coef lor leading_one) in
-    let expn =
-      B.(unsigned exps (bitv lsr of_int insort prec_ieee)) >=> fun expn ->
-        B.(ite (is_zero expn) (zero exps) (of_int exps prec_ieee)) >=> fun dexpn ->
-          B.(expn - bias exps bits - dexpn) in
-    let sign = B.msb bitv in
-    (* let is_inf = B.(and_ (expn = ones exps) (coef = zero sigs)) in
-     * let is_nan = B.(and_ (expn = ones exps) (coef <> zero sigs)) in
-     * let x =
-     *   match_ B.[
-     *       and_ is_inf sign --> ninf fsort;
-     *       is_inf           --> pinf fsort;
-     *       is_nan           --> qnan fsort coef;
-     *   ] ~default:(finite fsort sign expn coef) in *)
-    finite fsort sign expn coef >>= fun x ->
-    convert fsort' !!x rm >>= fun y ->
-    !!y
+    match IEEE754.create bits with
+    | None -> B.unk fsort'
+    | Some fmt ->
+       let fsort = sort_of_fmt fmt in
+       let p_1 = Bits.size (Floats.sigs fsort) - 1 in
+       let exps = Floats.exps fsort in
+       let sigs = Floats.sigs fsort in
+       let coef =
+         B.unsigned sigs bitv >=> fun coef ->
+         B.(one sigs lsl of_int sigs p_1) >=> fun leading_one ->
+         B.(coef lor leading_one) in
+       let expn =
+         B.(unsigned exps (bitv lsr of_int insort p_1)) >=> fun expn ->
+         B.(ite (is_zero expn) (zero exps) (of_int exps p_1)) >=> fun dexpn ->
+         B.(expn - bias exps fmt - dexpn) in
+       let sign = B.msb bitv in
+       (* let is_inf = B.(and_ (expn = ones exps) (coef = zero sigs)) in
+        * let is_nan = B.(and_ (expn = ones exps) (coef <> zero sigs)) in
+        * let x =
+        *   match_ B.[
+        *       and_ is_inf sign --> ninf fsort;
+        *       is_inf           --> pinf fsort;
+        *       is_nan           --> qnan fsort coef;
+        *   ] ~default:(finite fsort sign expn coef) in *)
+       finite fsort sign expn coef >>= fun x ->
+       convert fsort' !!x rm
+
 
 end
