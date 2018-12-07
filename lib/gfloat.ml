@@ -437,7 +437,6 @@ module Make(Bignum : Bignum) = struct
       {x with sign}
     else
       let data = norm {expn; frac} in
-      let () = printf "created: %s\n" (expn_to_str data.expn) in
       {sign; desc; data = Fin data; }
 
   let inf ?(negative=false) desc =
@@ -530,27 +529,6 @@ module Make(Bignum : Bignum) = struct
     | MoreThanHalf -> LessThanHalf
     | x -> x
 
-  let estimate_spot x =
-    let left  = minimize_exponent x in
-    let right = maximize_exponent x in
-    if Bignum.(left.expn <> x.expn && right.expn <> x.expn) then `Both
-    else if Bignum.(left.expn <> x.expn) then `Left
-    else if Bignum.(right.expn <> x.expn) then `Right
-    else `Nope
-
-  let balance x y =
-    match estimate_spot x, estimate_spot y with
-    | `Left,  _ when Bignum.(x.expn >$ y.expn) ->
-       minimize_exponent x, y
-    | `Right, _ when Bignum.(x.expn <$ y.expn) ->
-       maximize_exponent x, y
-    | _, `Left when Bignum.(x.expn <$ y.expn) ->
-       x, minimize_exponent y
-    | _, `Right when Bignum.(x.expn >$ y.expn) ->
-       x, maximize_exponent y
-    | _ ->
-       minimize_exponent x, minimize_exponent y
-
   (* [combine_loss more_signifincant less_significant]  *)
   let combine_loss more less =
     match more, less with
@@ -571,7 +549,6 @@ module Make(Bignum : Bignum) = struct
       else if Bignum.is_zero y.frac then
         x,{y with expn = x.expn },ExactlyZero
       else
-        let x,y = balance  x y in
         let expn = Bignum.max x.expn y.expn in
         if Bignum.(x.expn >$ y.expn) then
           let y, loss = unsafe_rshift  y Bignum.(expn - y.expn) in
@@ -581,9 +558,10 @@ module Make(Bignum : Bignum) = struct
           x,y,loss in
     match a.data, b.data with
     | Fin x, Fin y ->
-       let x = maximize_exponent x in
-       let y = maximize_exponent y in
+       let x = minimize_exponent x in
+       let y = minimize_exponent y in
        let x,y,loss = common_ground x y in
+
        let frac = Bignum.(x.frac + y.frac) in
        let data =
          if Bignum.(frac >= x.frac) then
@@ -723,70 +701,6 @@ module Make(Bignum : Bignum) = struct
     | _, Inf -> b
 
   let div ?(rm=Nearest_even) a b =
-    let extend_expn e = Bignum.sign_extend e (bits_in e) in
-    let min_expn = extend_expn (min_exponent a.desc.ebits) in
-    let max_expn = extend_expn (max_exponent a.desc.ebits) in
-    let extend {expn; frac} =
-      let expn = extend_expn expn in
-      let frac = Bignum.zero_extend frac (bits_in frac) in
-      {expn; frac} in
-    let is_overflow expn frac = false in
-      (* it's still a question here, because we can get
-         a finite result here. But anyway, if we get it just
-         because our maneur with extended representation - let's
-         assume we got an Inf  *)
-      (* Bignum.(expn <$ min_expn) &&
-       *   match Bignum.lsbn frac with
-       *   | Some i -> i > a.desc.fbits && not (Bignum.is_zero frac)
-       *   | None -> false in *)
-    match a.data,b.data with
-    | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
-    | Fin x, Fin y when is_zero b -> {a with data = Inf}
-    | Fin x, Fin y ->
-       let x = extend x in
-       let y = extend y in
-       let sign = xor_sign a.sign b.sign in
-       let xexpn, xfrac = safe_align_left x.expn x.frac in
-       let expn = Bignum.(xexpn - y.expn) in
-       let frac = Bignum.(xfrac / y.frac) in
-       if Bignum.(expn >$ max_expn) || is_overflow expn frac then
-         {a with sign; data = Inf}
-       else
-         let left = Bignum.(xfrac - frac * y.frac) in
-         let left = Bignum.(left lsl 1) in
-         let loss =
-           if Bignum.is_zero left then ExactlyZero
-           else if Bignum.(left > y.frac) then MoreThanHalf
-           else if Bignum.(left = y.frac) then ExactlyHalf
-           else LessThanHalf in
-         let frac = round rm sign frac loss in
-         let expn,frac,_ =
-           if Bignum.(expn <$ min_expn) then
-             let dexp = Bignum.(abs expn - abs min_expn) in
-             let {expn;frac=frac'}, loss' = unsafe_rshift {expn;frac} dexp in
-             let frac = round rm sign frac' loss' in
-             let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
-             expn,frac, combine_loss loss' loss
-           else
-             let expn = Bignum.extract ~hi:(a.desc.ebits - 1) expn in
-             expn,frac,loss in
-         let data =
-           match align_right ~precision:a.desc.fbits expn frac with
-           | None -> zero_finite a.desc
-           | Some (expn,frac,loss') ->
-              let frac = round rm sign frac loss' in
-              let frac = Bignum.extract ~hi:((prec a) - 1) frac in
-              norm {frac; expn} in
-         {a with data = Fin data; sign; }
-    | Nan _, Nan _ -> if is_signaling_nan a || is_quite_nan b then a else b
-    | Nan _, _ -> a
-    | _, Nan _ -> b
-    | Inf, Inf -> nan ~negative:true a.desc
-    | Inf, _ -> a
-    | _, Inf -> b
-
-
-  let long_div ?(rm=Nearest_even) a b =
     let extend z = extend (minimize_exponent z) 1 in
     match a.data,b.data with
     | Fin x, Fin y when is_zero a && is_zero b -> nan ~negative:true a.desc
@@ -799,12 +713,10 @@ module Make(Bignum : Bignum) = struct
                  {frac = Bignum.(x.frac lsl 1); expn = Bignum.pred x.expn }
                else x in
        let sign = xor_sign a.sign b.sign in
+       let msbn x = Option.value ~default:0 (Bignum.msbn x) in
+       let dexpn = a.desc.fbits - abs (msbn x.expn - msbn y.expn) - 1 in
+       let expn = Bignum.(x.expn - y.expn - of_int ~width:a.desc.ebits dexpn) in
        let prec = a.desc.fbits + 1 in
-       let expn = Bignum.(x.expn - y.expn) in
-       printf "xexpn is %s\n" (expn_to_str x.expn);
-       printf "yexpn is %s\n" (expn_to_str y.expn);
-       printf "expn is %s\n" (expn_to_str expn);
-
        let denom = y.frac in
        let rec loop i nom res =
          if i < 0 then nom,res
@@ -835,10 +747,6 @@ module Make(Bignum : Bignum) = struct
     | Inf, Inf -> nan ~negative:true a.desc
     | Inf, _ -> a
     | _, Inf -> b
-
-
-
-  let div = long_div
 
   let truncate ?(rm=Nearest_even) ~upto a = match a.data with
     | Fin {expn; frac} ->
