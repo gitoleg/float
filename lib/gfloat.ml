@@ -631,6 +631,8 @@ module Make(B : Theory.Basic) = struct
   (* let fsub = add_or_sub ~is_sub:true
    * let fadd = add_or_sub ~is_sub:false *)
 
+  let double s = Bits.define ((Bits.size s) * 2)
+
   let fmul rm x y =
     let open B in
     sort x >>= fun fsort ->
@@ -652,8 +654,8 @@ module Make(B : Theory.Basic) = struct
     let dexpn' = unsigned exps shift + dexpn in
     let expn = expn + dexpn' in
     let coef =
-      coef lsr shift >=> fun coef ->
       extract_last coef shift >=> fun loss ->
+      coef lsr shift >=> fun coef ->
       round rm sign coef loss shift >=> fun coef ->
       ite (expn <$ min_expn) (zero sigs) coef >=> fun coef ->
       unsigned (Floats.sigs fsort) coef in
