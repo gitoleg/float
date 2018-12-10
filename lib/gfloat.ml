@@ -601,7 +601,7 @@ module Make(B : Theory.Basic) = struct
         (cmp_expn = yexpn_gt) --> on_ygt;
       ] ~default:on_eql in
     sort xcoef >>= fun sigs' ->
-    let lost_bits = bind (B.abs (xexpn - yexpn)) @@ fun diff ->
+    let lost_bits = bind (abs (xexpn - yexpn)) @@ fun diff ->
       ite (is_zero diff) diff (diff - one exps) in
     let loss =
       bind3 xcoef ycoef lost_bits @@ fun xcoef ycoef lost_bits ->
@@ -609,8 +609,8 @@ module Make(B : Theory.Basic) = struct
         ~on_xgt:(extract_last ycoef lost_bits)
         ~on_ygt:(extract_last xcoef lost_bits) >=> fun loss ->
       invert_loss loss lost_bits in
-    let reverse = match_expn ~on_eql:(xcoef < ycoef) ~on_xgt:b0 ~on_ygt:b1 in
-    let sign = ite reverse (inv xsign) xsign in
+    let swap = match_expn ~on_eql:(xcoef < ycoef) ~on_xgt:b0 ~on_ygt:b1 in
+    let sign = ite swap (inv xsign) xsign in
     let coef =
       bind4 xcoef ycoef loss lost_bits @@ fun xcoef ycoef loss lost_bits ->
       match_expn ~on_eql:xcoef
@@ -618,7 +618,7 @@ module Make(B : Theory.Basic) = struct
       match_expn ~on_eql:ycoef
         ~on_xgt:(ycoef lsr lost_bits) ~on_ygt:(ycoef lsl one sigs') >=> fun ycoef ->
       ite (is_zero loss) (zero sigs') (one sigs') >=> fun borrow ->
-      ite reverse (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) in
+      ite swap (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) in
     let expn =
       bind3 (msb coef) xexpn yexpn @@ fun msb xexpn yexpn ->
       max xexpn yexpn >=> fun max ->
