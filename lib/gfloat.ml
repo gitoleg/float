@@ -383,6 +383,13 @@ module Make(B : Theory.Basic) = struct
     let expn = expn - dexpn in
     !! (expn,coef)
 
+  let msbn x =
+    let open B in
+    sort x >>= fun sort ->
+    size x >>= fun prec ->
+    bind (clz x) (fun clz ->
+        of_int sort prec - clz - one sort)
+
   let with' : type e k.
     ?sign: bit value t ->
     ?expn: e bitv value t ->
@@ -723,12 +730,10 @@ module Make(B : Theory.Basic) = struct
       significand y' >=> fun denom ->
       ite (nomin < denom) (one exps) (zero exps) >=> fun dexpn' ->
       of_int sigs prec >=> fun prec ->
-      prec - clz nomin >=> fun msb_nomin ->
-      prec - clz denom >=> fun msb_denom ->
       prec - one sigs >=> fun dexpn ->
       exponent x' - exponent y' - dexpn' - low exps dexpn in
-    with' x ~expn ~coef ~sign
-    >>= fun x -> minimize_exponent !!x
+    with' x ~expn ~coef ~sign >>= fun x ->
+    minimize_exponent !!x
 
   let narrowing_convert outs input rm =
     sort input >>= fun fs ->
