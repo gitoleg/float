@@ -481,51 +481,16 @@ module Make(B : Theory.Basic) = struct
     norm expn coef >>= fun (expn,coef) ->
     pack fsort sign expn coef
 
-    (* let lost_bits = bind (abs (xexpn - yexpn)) @@ fun diff ->
-     *   ite (is_zero diff) diff (diff - one exps) in
-     * let loss =
-     *   bind3 xcoef ycoef lost_bits @@ fun xcoef ycoef lost_bits ->
-     *   match_expn ~on_eql:(zero sigs')
-     *     ~on_xgt:(extract_last ycoef lost_bits)
-     *     ~on_ygt:(extract_last xcoef lost_bits) >=> fun loss ->
-     *   invert_loss loss lost_bits in
-     * let swap = match_expn ~on_eql:(xcoef < ycoef) ~on_xgt:b0 ~on_ygt:b1 in
-     * let sign = ite swap (inv xsign) xsign in
-     * let coef =
-     *   bind4 xcoef ycoef loss lost_bits @@ fun xcoef ycoef loss lost_bits ->
-     *   match_expn ~on_eql:xcoef
-     *     ~on_xgt:(xcoef lsl one sigs') ~on_ygt:(xcoef lsr lost_bits) >=> fun xcoef ->
-     *   match_expn ~on_eql:ycoef
-     *     ~on_xgt:(ycoef lsr lost_bits) ~on_ygt:(ycoef lsl one sigs') >=> fun ycoef ->
-     *   ite (is_zero loss) (zero sigs') (one sigs') >=> fun borrow ->
-     *   ite swap (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) in
-     * let expn =
-     *   bind3 (msb coef) xexpn yexpn @@ fun msb xexpn yexpn ->
-     *   max xexpn yexpn >=> fun max ->
-     *   min_exponent exps >=> fun min ->
-     *   ite (xexpn = yexpn) xexpn (max - one exps) >=> fun expn ->
-     *   ite (is_zero coef) min (ite msb (succ expn) expn) in
-     * let coef = bind3 coef loss lost_bits @@ fun coef loss lost_bits ->
-     *   msb coef >=> fun msb ->
-     *   ite msb (extract_last coef (one sigs')) (zero sigs') >=> fun loss' ->
-     *   ite msb (combine_loss loss' loss lost_bits) loss >=> fun loss ->
-     *   ite msb (succ lost_bits) lost_bits >=> fun lost_bits ->
-     *   ite msb (coef lsr one sigs') coef >=> fun coef ->
-     *   unsigned sigs coef >=> fun coef ->
-     *   round rm sign coef loss lost_bits in
-     * with' x ~expn ~coef ~sign >>= fun x ->
-     * minimize_exponent !!x *)
+let add_or_sub ~is_sub fsort rm x y =
+    let ( lxor ) = xor_sign in
+    let s1 = is_sub in
+    let s2 = fsign x in
+    let s3 = fsign y in
+    let is_sub = s1 lxor (s2 lxor s3) in
+    B.ite is_sub (fsub fsort rm x y) (fadd fsort rm x y)
 
-  (* let add_or_sub ~is_sub rm x y =
-   *   let ( lxor ) = xor_sign in
-   *   let s1 = if is_sub then B.b1 else B.b0 in
-   *   let s2 = fsign x in
-   *   let s3 = fsign y in
-   *   let is_sub = s1 lxor (s2 lxor s3) in
-   *   B.ite is_sub (fsub rm x y) (fadd rm x y) *)
-
-  (* let fsub = add_or_sub ~is_sub:true
-   * let fadd = add_or_sub ~is_sub:false *)
+  let fsub fsort rm x y = add_or_sub ~is_sub:B.b1 fsort rm x y
+  let fadd fsort rm x y = add_or_sub ~is_sub:B.b0 fsort rm x y
 
   (* let double s = Bits.define ((Bits.size s) * 2)
    *
