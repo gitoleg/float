@@ -193,7 +193,7 @@ module Make(B : Theory.Basic) = struct
     let coef = B.low (Sort.sigs fsort) bitv in
     if spec.t = spec.p then coef
     else
-      let expn = exponent fsort bitv in
+      exponent fsort bitv >=> fun expn ->
       let sigs' = Bits.define spec.p in
       let bit = Bits.define 1 in
       let leading_bit = B.(ite (is_zero expn) (zero bit) (one bit)) in
@@ -225,6 +225,10 @@ module Make(B : Theory.Basic) = struct
     let bits_1 = Bits.define Caml.(Bits.size bits - 1) in
     let sign = ite sign (B.one bit) (B.zero bit) in
     B.append bits sign (B.append bits_1 expn coef)
+
+  (* let pack fsort sign expn coef =
+   *   let bits = IEEE754.Sort.bits fsort in
+   *   B.unsigned bits coef *)
 
   let match_ cases ~default =
     let cases = List.rev cases in
@@ -297,8 +301,8 @@ module Make(B : Theory.Basic) = struct
     B.(expn + num), frac', loss
 
   (* maximum possible exponent that fits in [n - 1] bits. (one for sign) *)
-  let max_exponent' n = int_of_float (2.0 ** (float_of_int (n - 1))) - 1
-  let min_exponent' n = - (max_exponent' n)
+  let max_exponent' n = int_of_float (2.0 ** (float_of_int n )) - 2
+  let min_exponent' n = 0
   let max_exponent  n = B.of_int n (Bits.size n |> max_exponent')
   let min_exponent  n = B.of_int n (Bits.size n |> min_exponent')
 
@@ -343,11 +347,8 @@ module Make(B : Theory.Basic) = struct
     sort expn >>= fun exps ->
     sort coef >>= fun sigs ->
     let min_expn = min_exponent exps in
-    bind (clz coef) @@ fun clz ->
-    Var.Generator.fresh sigs >>= fun v ->
-    let_ v
-      (umin clz (unsigned sigs (abs (expn - min_expn))))
-      (var v)
+    clz coef >=> fun clz ->
+    umin clz (unsigned sigs (abs (expn - min_expn)))
 
   (* TODO: consider test coef for zero to prevent expn change *)
   let safe_align_left expn coef =
@@ -371,8 +372,7 @@ module Make(B : Theory.Basic) = struct
      fraction shifted as left as possible, i.e. it occupies
      more significant bits *)
   let minimize_exponent = safe_align_left
-
-  let norm = minimize_exponent
+  let norm = safe_align_left
 
   let prec x = Bits.size (Value.sort x)
 
@@ -388,10 +388,6 @@ module Make(B : Theory.Basic) = struct
     let size = Bits.size smore + Bits.size sless in
     let sort' = Bits.define size in
     B.concat sort' [more; less]
-
-  let test_pack fsort x =
-    let sign,xexpn,xcoef = unpack fsort x in
-    pack fsort sign xexpn xcoef
 
   let fadd fsort rm x y =
     let open B in
@@ -452,6 +448,7 @@ module Make(B : Theory.Basic) = struct
     let exps,sigs = floats fsort in
     let xsign,xexpn,xcoef = unpack fsort x in
     let _,yexpn,ycoef = unpack fsort y  in
+    let min_expn = min_exponent exps in
     extend xcoef ~addend:1 >=> fun xcoef ->
     extend ycoef ~addend:1 >=> fun ycoef ->
     sort xcoef >>= fun sigs' ->
@@ -465,21 +462,19 @@ module Make(B : Theory.Basic) = struct
     or_ (xexpn < yexpn) (and_ (xexpn = yexpn) (xcoef < ycoef)) >=> fun swap ->
     ite swap (inv xsign) xsign >=> fun sign ->
     match_ [
-        (xexpn < yexpn) --> xcoef lsr lost_bits;
         (xexpn > yexpn) --> xcoef lsl one sigs';
+        (xexpn < yexpn) --> xcoef lsr lost_bits;
       ] ~default:xcoef >=> fun xcoef ->
     match_ [
-        (yexpn < xexpn) --> ycoef lsr lost_bits;
         (yexpn > xexpn) --> ycoef lsl one sigs';
+        (yexpn < xexpn) --> ycoef lsr lost_bits;
       ] ~default:ycoef >=> fun ycoef ->
     ite (is_zero loss) (zero sigs') (one sigs') >=> fun borrow ->
     ite swap (ycoef - xcoef - borrow) (xcoef - ycoef - borrow) >=> fun coef ->
     msb coef >=> fun msbc ->
     max xexpn yexpn >=> fun expn ->
-    min_exponent exps >=> fun min ->
     ite (xexpn = yexpn) expn (expn - one exps) >=> fun expn ->
-    ite (is_zero coef) min (ite msbc (succ expn) expn) >=> fun expn ->
-
+    ite (is_zero coef) min_expn (ite msbc (succ expn) expn) >=> fun expn ->
     ite msbc (extract_last coef (one sigs')) (zero sigs') >=> fun loss' ->
     ite msbc (combine_loss loss' loss lost_bits) loss >=> fun loss ->
     ite msbc (succ lost_bits) lost_bits >=> fun lost_bits ->

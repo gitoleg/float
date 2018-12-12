@@ -166,7 +166,7 @@ let binop op x y ctxt =
      let op = string_of_op op x y in
      assert_bool op (bit_equal op real ours)
 
-(* let ( + ) = binop `Add *)
+let ( + ) = binop `Add
 let ( - ) = binop `Sub
 (* let ( * ) = binop `Mul
  * let ( / ) = binop `Div *)
@@ -178,46 +178,39 @@ let make_float s e c =
   let w = Word.(concat (concat e s) c) in
   Word.to_int64_exn w |> Int64.float_of_bits
 
-let create x ctxt =
-  let check r = assert_bool (sprintf "create failed for %g" x) r in
-  let y = G.test_pack fsort (of_float x) in
-  match to_float y with
-  | None -> check false
-  | Some y ->
-     let bits_x = Int64.bits_of_float x in
-     let bits_y = Int64.bits_of_float y in
-     check Int64.(bits_x = bits_y)
+
+(* let bits64 : bits64 bitv sort = Bits.define 64
+ *
+ * let a = Var.create bits64 "A"
+ * let b = Var.create bits64 "B"
+ *
+ * let z = G.fsub fsort G.rne (GE.BIL.var a) (GE.BIL.var b)
+ * let _ = eval z *)
 
 let suite () =
   let neg x = ~-. x in
 
   "Gfloat" >::: [
 
-      (* creation *)
-      (* "create 1.0" >:: create 1.0; *)
-      (* "create 1.0" >:: create 4.2;
-       * "create 1.0" >:: create 2.3;
-       * "create 0.0" >:: create 0.0; *)
-
       (* add *)
-      (* "0.0 + 0.5"   >:: 0.0 + 0.5;
-       * "4.2 + 2.3"     >:: 4.2 + 2.3;
-       * "4.2 + 2.98"    >:: 4.2 + 2.98;
-       * "2.2 + 4.28"    >:: 2.2 + 4.28;
-       * "2.2 + 2.46"    >:: 2.2 + 2.46;
-       * "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
-       * "123213123.23434 + 56757.05656549151" >:: 123213123.23434 + 56757.05656549151; *)
+      "0.0 + 0.5"   >:: 0.0 + 0.5;
+      "4.2 + 2.3"     >:: 4.2 + 2.3;
+      "4.2 + 2.98"    >:: 4.2 + 2.98;
+      "2.2 + 4.28"    >:: 2.2 + 4.28;
+      "2.2 + 2.46"    >:: 2.2 + 2.46;
+      "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
+      "123213123.23434 + 56757.05656549151" >:: 123213123.23434 + 56757.05656549151;
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
       "4.28 - 2.2"    >:: 4.28 - 2.2;
       "2.2 - 4.28"    >:: 2.2 - 4.28;
       "2.2 - 2.6"     >:: 2.2 - 2.6;
-      (* "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
-       * "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
-       * "0.0 - 0.0"     >:: 0.0 - 0.0;
-       * "4.2 - 4.2"     >:: 4.2 - 4.2;
-       * "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151; *)
+      "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
+      "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
+      "0.0 - 0.0"     >:: 0.0 - 0.0;
+      "4.2 - 4.2"     >:: 4.2 - 4.2;
+      "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151;
 
       (* mul *)
       (* "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -258,5 +251,9 @@ let deconstruct x =
   printf "ocaml %f: bits %s, 0x%LX\n" x (string_of_bits64 x) y;
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
+
+(* let () = deconstruct 2.2
+ * let () = deconstruct 2.6 *)
+
 
 let () = run_test_tt_main (suite ())

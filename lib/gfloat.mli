@@ -21,7 +21,4 @@ module Make(B : Theory.Basic) : sig
   (* val fmul : ('b, 'e, 't, 's) binop
    * val fdiv : ('b, 'e, 't, 's) binop *)
 
-  val test_pack :
-        (('b,'e,'t) IEEE754.t,'s) format float sort -> 's bitv value t -> 's bitv value t
-
 end
