@@ -18,7 +18,7 @@ module Make(B : Theory.Basic) : sig
 
   val fadd : ('b, 'e, 't, 's) binop
   val fsub : ('b, 'e, 't, 's) binop
-  (* val fmul : ('b, 'e, 't, 's) binop
-   * val fdiv : ('b, 'e, 't, 's) binop *)
+  val fmul : ('b, 'e, 't, 's) binop
+  val fdiv : ('b, 'e, 't, 's) binop
 
 end

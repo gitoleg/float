@@ -152,24 +152,6 @@ module Make(B : Theory.Basic) = struct
 
   let (>=>) = bind
 
-  let bind2 a b body =
-    bind a @@ fun a ->
-    bind b @@ fun b ->
-    body a b
-
-  let bind3 a b c body =
-    bind a @@ fun a ->
-    bind b @@ fun b ->
-    bind c @@ fun c ->
-    body a b c
-
-  let bind4 a b c d body =
-    bind a @@ fun a ->
-    bind b @@ fun b ->
-    bind c @@ fun c ->
-    bind d @@ fun d ->
-    body a b c d
-
   let floats fsort =
     let open IEEE754 in
     let exps = Sort.exps fsort in
@@ -226,6 +208,9 @@ module Make(B : Theory.Basic) = struct
 
   let is_special fsort x = B.or_ (is_nan fsort x) (is_inf fsort x)
   let is_finite fsort x = B.inv (is_special fsort x)
+
+  let precision fsort = let {IEEE754.p} = IEEE754.Sort.spec fsort in p
+  let bias fsort = let {IEEE754.bias} = IEEE754.Sort.spec fsort in bias
 
   let match_ cases ~default =
     let cases = List.rev cases in
@@ -371,9 +356,7 @@ module Make(B : Theory.Basic) = struct
   let minimize_exponent = safe_align_left
   let norm = safe_align_left
 
-  let prec x = Bits.size (Value.sort x)
-
-  (* returns result sign *)
+   (* returns result sign *)
   let xor_sign s s' = B.(and_ (or_ s s') (inv (and_ s s')))
 
   (* TODO: consider other version *)
@@ -492,93 +475,73 @@ let add_or_sub ~is_sub fsort rm x y =
   let fsub fsort rm x y = add_or_sub ~is_sub:B.b1 fsort rm x y
   let fadd fsort rm x y = add_or_sub ~is_sub:B.b0 fsort rm x y
 
-  (* let double s = Bits.define ((Bits.size s) * 2)
-   *
-   * let fmul rm x y =
-   *   let open B in
-   *   sort x >>= fun fsort ->
-   *   precision x >>= fun coef_bits ->
-   *   x >>> fun exps' sigs' ->
-   *   let exps = double exps' in
-   *   let sigs = double sigs' in
-   *   let min_expn = signed exps (min_exponent exps') in
-   *   let max_expn = signed exps (max_exponent sigs') in
-   *   let xsign, xexpn, xcoef = data x in
-   *   let ysign, yexpn, ycoef = data y in
-   *   let expn = signed exps xexpn + signed exps yexpn in
-   *   let coef = unsigned sigs xcoef * unsigned sigs ycoef in
-   *   let sign = xor_sign xsign ysign in
-   *   let clz  = clz coef in
-   *   let prec  = of_int sigs coef_bits in
-   *   let shift = ite (clz >= prec) (zero sigs) (prec - clz) in
-   *   let dexpn = ite (expn <$ min_expn) (abs expn - abs min_expn) (zero exps) in
-   *   let shift = shift + unsigned sigs dexpn in
-   *   let dexpn' = unsigned exps shift + dexpn in
-   *   let expn = expn + dexpn' in
-   *   let coef =
-   *     extract_last coef shift >=> fun loss ->
-   *     coef lsr shift >=> fun coef ->
-   *     round rm sign coef loss shift >=> fun coef ->
-   *     ite (expn <$ min_expn) (zero sigs) coef >=> fun coef ->
-   *     unsigned sigs' coef in
-   *   let is_inf = expn >$ max_expn in
-   *   let expn =
-   *     expn >=> fun expn ->
-   *     ite (expn <$ min_expn) (zero exps) expn >=> fun expn ->
-   *     unsigned exps' expn >=> fun expn ->
-   *     min_exponent exps' >=> fun min ->
-   *     ite (is_zero coef) min expn in
-   *   with' x ~expn ~coef ~sign ~is_inf
-   *
-   * let mask_bit sort i =
-   *   let uno = B.one sort in
-   *   let shf = B.of_int sort i in
-   *   B.(uno lsl shf)
-   *
-   * let fdiv rm x y =
-   *   let open B in
-   *   let extend z =
-   *     z >>= fun z ->
-   *     minimize_exponent !!z >>= fun z ->
-   *     extend !!z ~addend:1 >>= fun z ->
-   *     !! z in
-   *   x >>> fun exps sigs ->
-   *   let sign = xor_sign (fsign x) (fsign y) in
-   *   let x' = extend x in
-   *   let y' = extend y in
-   *   sort (significand x') >>= fun sigs ->
-   *   let rec loop i bits nomin denom =
-   *     if Caml.(i < 0) then
-   *       List.fold bits ~f:(lor) ~init:(zero sigs) >=> fun coef ->
-   *       let loss = match_ [
-   *           (nomin > denom) --> Lost.alot sigs;
-   *           (nomin = denom) --> Lost.half sigs;
-   *           (nomin = zero sigs) --> Lost.zero sigs;
-   *        ] ~default:(Lost.afew sigs) in
-   *       round rm sign coef loss (Lost.bits sigs)
-   *     else
-   *       let next_nomin = ite (nomin > denom) (nomin - denom) nomin in
-   *       let bit = ite (nomin > denom) (mask_bit sigs i) (zero sigs) in
-   *       let bits = bit :: bits in
-   *       bind next_nomin (fun next_nomin ->
-   *        loop Caml.(i - 1) bits (next_nomin lsl one sigs) denom) in
-   *   let coef =
-   *     precision x    >>= fun prec ->
-   *     significand x' >=> fun nomin ->
-   *     significand y' >=> fun denom ->
-   *     ite (nomin < denom) (nomin lsl one sigs) nomin >=> fun nomin ->
-   *     loop Caml.(prec - 1) [] nomin denom >=> fun coef ->
-   *     unsigned sigs coef in
-   *   let expn =
-   *     precision   x >>= fun prec ->
-   *     significand x' >=> fun nomin ->
-   *     significand y' >=> fun denom ->
-   *     ite (nomin < denom) (one exps) (zero exps) >=> fun dexpn' ->
-   *     of_int sigs prec >=> fun prec ->
-   *     prec - one sigs >=> fun dexpn ->
-   *     exponent x' - exponent y' - dexpn' - low exps dexpn in
-   *   with' x ~expn ~coef ~sign >>= fun x ->
-   *   minimize_exponent !!x *)
+  let double bitv =
+    sort bitv >>= fun sort ->
+    extend bitv ~addend:(Bits.size sort)
 
+  let fmul fsort rm x y =
+    let open B in
+    let exps,sigs = floats fsort in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun ysign yexpn ycoef ->
+    double xexpn >=> fun xexpn ->
+    double yexpn >=> fun yexpn ->
+    double xcoef >=> fun xcoef ->
+    double ycoef >=> fun ycoef ->
+    sort xexpn >>= fun exps' ->
+    sort xcoef >>= fun sigs' ->
+    xexpn + yexpn - of_int exps' (bias fsort) >=> fun expn ->
+    xcoef * ycoef >=> fun coef ->
+    xor_sign xsign ysign >=> fun sign ->
+    clz coef >=> fun clz ->
+    of_int sigs' (precision fsort) >=> fun prec ->
+    ite (clz >= prec) (zero sigs') (prec - clz) >=> fun shift ->
+    extract_last coef shift >=> fun loss ->
+    coef lsr shift >=> fun coef ->
+    round rm sign coef loss shift >=> fun coef ->
+    unsigned sigs coef >=> fun coef ->
+    unsigned exps expn >=> fun expn ->
+    min_exponent exps >=> fun min ->
+    ite (is_zero coef) min expn >=> fun expn ->
+    norm expn coef >>= fun (expn,coef) ->
+    pack fsort sign expn coef
+
+  let mask_bit sort i =
+    let uno = B.one sort in
+    let shf = B.of_int sort i in
+    B.(uno lsl shf)
+
+  let fdiv fsort rm x y =
+    let open B in
+    let prec = precision fsort in
+    let exps,sigs' = floats fsort in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun ysign yexpn ycoef ->
+    extend xcoef ~addend:1 >=> fun xcoef ->
+    extend ycoef ~addend:1 >=> fun ycoef ->
+    sort xcoef >>= fun sigs ->
+    xor_sign xsign ysign >=> fun sign ->
+    let rec loop i bits nomin denom =
+      if Caml.(i < 0) then
+        List.fold bits ~f:(lor) ~init:(zero sigs) >=> fun coef ->
+        let loss = match_ [
+            (nomin > denom) --> Lost.alot sigs;
+            (nomin = denom) --> Lost.half sigs;
+            (nomin = zero sigs) --> Lost.zero sigs;
+         ] ~default:(Lost.afew sigs) in
+        round rm sign coef loss (Lost.bits sigs)
+      else
+        let next_nomin = ite (nomin > denom) (nomin - denom) nomin in
+        let bit = ite (nomin > denom) (mask_bit sigs i) (zero sigs) in
+        let bits = bit :: bits in
+        bind next_nomin (fun next_nomin ->
+         loop Caml.(i - 1) bits (next_nomin lsl one sigs) denom) in
+      ite (xcoef < ycoef) (xcoef lsl one sigs) xcoef >=> fun nomin ->
+      loop Caml.(prec - 1) [] nomin ycoef >=> fun coef ->
+      unsigned sigs' coef >=> fun coef ->
+      ite (xcoef < ycoef) (one exps) (zero exps) >=> fun dexpn ->
+      xexpn - yexpn - dexpn + of_int exps (bias fsort) >=> fun expn ->
+      norm expn coef >>= fun (expn,coef) ->
+      pack fsort sign expn coef
 
 end
