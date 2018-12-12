@@ -41,8 +41,7 @@ module Rounding = struct
   let rounding = Semantics.declare ~name:"rounding" (module Rounding_domain)
 
   module T = struct
-    let make t =
-      !! (Value.put rounding (Value.empty Rmode.t) (Some t))
+    let make t = !! (Value.put rounding (Value.empty Rmode.t) (Some t))
 
     let rne = make Nearest_even
     let rna = make Nearest_away
@@ -71,40 +70,28 @@ module Make(B : Theory.Basic) = struct
     let ones s = B.(not (zero s))
 
     let is_one x =
-      x >>= fun v ->
-      let y = one (Value.sort v) in
-      eq x y
+      x >>= fun v -> eq x (one (Value.sort v))
 
     let is_all_ones x =
-      x >>= fun v ->
-      let y = ones (Value.sort v) in
-      eq x y
+      x >>= fun v -> eq x (ones (Value.sort v))
 
     let of_int sort v =
-      int sort
-        (Word.of_int ~width:(Bits.size sort) v)
+      int sort (Word.of_int ~width:(Bits.size sort) v)
 
     let is_negative = B.msb
     let is_positive x = B.inv (B.msb x)
     let is_non_negative x = B.or_ (is_positive x) (B.is_zero x)
-
-    let zero_extend x upto = B.unsigned upto x
-    let sign_extend x upto = B.signed upto x
-
     let abs x = ite (is_negative x) (neg x) x
 
     let of_bool = function
       | true -> b1
       | false -> b0
 
-    let if_ cond ~then_ ~else_ = ite cond then_ else_
-
     module Infix = struct
       let ( + ) = add
       let ( - ) = sub
       let ( * ) = mul
       let ( / ) = div
-      let ( /$ ) = sdiv
       let ( = ) = eq
       let ( <> ) = neq
       let ( < ) = ult
@@ -124,9 +111,10 @@ module Make(B : Theory.Basic) = struct
 
     include Infix
 
-    let max x y = ite (x >$ y) x y
-    let min x y = ite (x <$ y) x y
-    let umin x y = ite (x < y) x y
+    let max x y = ite (x > y) x y
+    let min x y = ite (x < y) x y
+    let smax x y = ite (x >$ y) x y
+    let smin x y = ite (x <$ y) x y
   end
 
   module Lost = struct
@@ -253,16 +241,11 @@ module Make(B : Theory.Basic) = struct
       | Some Negative_inf -> sign
       | Some Nearest_away -> loss >= half
       | Some Nearest_even ->
-        if_ (loss > half) ~then_:b1
-          ~else_:(
-            if_ (loss = half) ~then_:(lsb coef)
-              ~else_:b0)
+         or_ (loss > half) (and_ (loss = half) (lsb coef))
       | _ -> b0 in
     let is_needed = and_ (non_zero lost_bits) is_needed in
     let all_ones = not (zero sigs) in
-    if_ (and_ (coef <> all_ones) is_needed)
-      ~then_:(succ coef)
-      ~else_:coef
+    ite (and_ (coef <> all_ones) is_needed) (succ coef) coef
 
   (* maximum possible exponent that fits in [n - 1] bits. (one for sign) *)
   let max_exponent' n = int_of_float (2.0 ** (float_of_int n )) - 2
@@ -312,7 +295,7 @@ module Make(B : Theory.Basic) = struct
     sort coef >>= fun sigs ->
     let min_expn = min_exponent exps in
     clz coef >=> fun clz ->
-    umin clz (unsigned sigs (abs (expn - min_expn)))
+    min clz (unsigned sigs (abs (expn - min_expn)))
 
   (* TODO: consider test coef for zero to prevent expn change *)
   let safe_align_left expn coef =
