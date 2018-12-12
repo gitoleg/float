@@ -4,6 +4,8 @@ open Bap.Std
 open Bap_knowledge
 open Bap_core_theory
 
+open Gfloat
+
 [@@@warning "-3"]
 
 module Expi = struct
@@ -90,15 +92,6 @@ let string_of_bits64 x =
       if x then s @@ 1
       else s @@ 0)
 
-let print_result ~pref x =
-  let e = eval (G.exponent x) in
-  let s = eval (G.significand x) in
-  match e,s with
-  | Some e, Some s ->
-     printf "%s: %s %s\n" pref (Word.to_string e) (Word.to_string s)
-  | _ -> printf "fail!\n"
-
-
 type bits11
 type bits53
 type bits64
@@ -107,19 +100,18 @@ let exps : bits11 bitv sort = Bits.define 11
 let sigs : bits53 bitv sort = Bits.define 53
 let bitv : bits64 bitv sort = Bits.define 64
 
-let fsort = Floats.define exps sigs
-
 let knowledge_of_word sort w =
   let v = Value.create sort Semantics.empty in
   !! (Value.put GE.exp v (Some (Bil.int w)))
 
+let fsort : ((int,bits11,bits53) IEEE754.ieee754,'s) format float sort  = IEEE754.(Sort.define binary64)
+
 let of_float x =
   let bits = Word.of_int64 (Int64.bits_of_float x) in
   let bitv = knowledge_of_word bitv bits in
-  G.of_ieee bitv G.rne fsort
+  bitv
 
-let to_float x =
-  let bitv = G.to_ieee bitv G.rne x in
+let to_float bitv =
   match eval bitv with
   | None -> None
   | Some w ->
@@ -163,21 +155,21 @@ let binop op x y ctxt =
   let f = match op with
        | `Add -> G.fadd
        | `Sub -> G.fsub
-       | `Mul -> G.fmul
-       | `Div -> G.fdiv in
+       | `Mul -> failwith "todo"
+       | `Div -> failwith "todo" in
   let x' = of_float x in
   let y' = of_float y in
-  let z = f G.rne x' y' in
+  let z = f fsort G.rne x' y' in
   match to_float z with
   | None -> fail "result is none" op x y
   | Some ours ->
      let op = string_of_op op x y in
      assert_bool op (bit_equal op real ours)
 
+(* let ( + ) = binop `Add *)
 let ( - ) = binop `Sub
-let ( + ) = binop `Add
-let ( * ) = binop `Mul
-let ( / ) = binop `Div
+(* let ( * ) = binop `Mul
+ * let ( / ) = binop `Div *)
 
 let make_float s e c =
   let s = Word.of_int ~width:1 s in
@@ -186,55 +178,69 @@ let make_float s e c =
   let w = Word.(concat (concat e s) c) in
   Word.to_int64_exn w |> Int64.float_of_bits
 
+let create x ctxt =
+  let check r = assert_bool (sprintf "create failed for %g" x) r in
+  let y = G.test_pack fsort (of_float x) in
+  match to_float y with
+  | None -> check false
+  | Some y ->
+     let bits_x = Int64.bits_of_float x in
+     let bits_y = Int64.bits_of_float y in
+     check Int64.(bits_x = bits_y)
+
 let suite () =
   let neg x = ~-. x in
 
   "Gfloat" >::: [
 
+      (* creation *)
+      (* "create 1.0" >:: create 1.0; *)
+      (* "create 1.0" >:: create 4.2;
+       * "create 1.0" >:: create 2.3;
+       * "create 0.0" >:: create 0.0; *)
+
       (* add *)
-      (* "0.0 + 0.5"     >:: 0.0 + 0.5; *)
-      "4.2 + 2.3"     >:: 4.2 + 2.3;
-      "4.2 + 2.98"    >:: 4.2 + 2.98;
-      "2.2 + 4.28"    >:: 2.2 + 4.28;
-      "2.2 + 2.46"    >:: 2.2 + 2.46;
-      "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
-      "123213123.23434 + 56757.05656549151" >:: 123213123.23434 + 56757.05656549151;
+      (* "0.0 + 0.5"   >:: 0.0 + 0.5;
+       * "4.2 + 2.3"     >:: 4.2 + 2.3;
+       * "4.2 + 2.98"    >:: 4.2 + 2.98;
+       * "2.2 + 4.28"    >:: 2.2 + 4.28;
+       * "2.2 + 2.46"    >:: 2.2 + 2.46;
+       * "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
+       * "123213123.23434 + 56757.05656549151" >:: 123213123.23434 + 56757.05656549151; *)
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
       "4.28 - 2.2"    >:: 4.28 - 2.2;
       "2.2 - 4.28"    >:: 2.2 - 4.28;
       "2.2 - 2.6"     >:: 2.2 - 2.6;
-      "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
-      (* "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
-       * "0.0 - 0.0"     >:: 0.0 - 0.0; *)
-      (* "4.2 - 4.2"     >:: 4.2 - 4.2; *)
-      "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151;
+      (* "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
+       * "0.0 - 0.00000001" >:: 0.0 - 0.0000001;
+       * "0.0 - 0.0"     >:: 0.0 - 0.0;
+       * "4.2 - 4.2"     >:: 4.2 - 4.2;
+       * "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151; *)
 
       (* mul *)
-      "1.0 * 2.5"    >:: 1.0 * 2.5;
-      "2.5 * 0.5"    >:: 2.5 * 0.5;
-      "4.2 * 3.4"    >:: 4.2 * 3.4;
-      "0.01 * 0.02"  >:: 0.01 * 0.02;
-      "1.0 * 0.5"    >:: 1.0 * 0.5;
-      "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
-      "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
-
-      (* div *)
-      "2.0 / 0.5"   >:: 2.0 / 0.5;
-      "1.0 / 3.0"   >:: 1.0 / 3.0;
-      "3.0 / 32.0"  >:: 3.0 / 32.0;
-      (* "42.3 / 0.0"  >:: 42.3 / 0.0; *)
-      "324.32423 / 1.2" >:: 324.32423 / 1.2;
-      "2.4 / 3.123131"  >:: 2.4 / 3.123131;
-      "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
-      "9991132.2131363434 / 2435.05656549151" >:: 9991132.2131363434 / 2435.05656549151;
+      (* "1.0 * 2.5"    >:: 1.0 * 2.5;
+       * "2.5 * 0.5"    >:: 2.5 * 0.5;
+       * "4.2 * 3.4"    >:: 4.2 * 3.4;
+       * "0.01 * 0.02"  >:: 0.01 * 0.02;
+       * "1.0 * 0.5"    >:: 1.0 * 0.5;
+       * "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
+       * "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+       *
+       * (\* div *\)
+       * "2.0 / 0.5"   >:: 2.0 / 0.5;
+       * "1.0 / 3.0"   >:: 1.0 / 3.0;
+       * "3.0 / 32.0"  >:: 3.0 / 32.0;
+       * (\* "42.3 / 0.0"  >:: 42.3 / 0.0; *\)
+       * "324.32423 / 1.2" >:: 324.32423 / 1.2;
+       * "2.4 / 3.123131"  >:: 2.4 / 3.123131;
+       * "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
+       * "9991132.2131363434 / 2435.05656549151" >:: 9991132.2131363434 / 2435.05656549151; *)
       (* "test"  >:: make_float 0 0 8 / make_float 0 0 3; *)
 
 
     ]
-
-let float_result = print_result ~pref:"result"
 
 let result x =
   match eval x with
@@ -253,44 +259,4 @@ let deconstruct x =
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
 
-let test_conv () =
-  let x = ~-. 4.2 in
-  deconstruct x;
-  let bits = Word.of_int64 (Int64.bits_of_float x) in
-  let bs = knowledge_of_word bitv bits in
-  let x = G.of_ieee bs G.rne fsort in
-  let y = G.to_ieee bitv G.rne x in
-  result y
-
-let test_min () =
-  let create expn coef =
-    let sign = GE.Basic.b0 in
-    let expn = knowledge_of_word exps (Word.of_string expn) in
-    let coef = knowledge_of_word sigs (Word.of_string coef) in
-    G.finite fsort sign expn coef in
-  let x = create "0x01:11u" "0x01:53u" in
-  let z = G.minimize_exponent x in
-  let z = G.exponent z in
-  result z
-
-let test () =
-  let x = of_float 1.0 in
-  let y = of_float 3.0 in
-  let z = G.fdiv G.rne x y in
-  float_result z
-
-let a () = test ()
 let () = run_test_tt_main (suite ())
-
-module Clz = struct
-  type bits122
-  let sigs : bits122 bitv sort = Bits.define 122
-
-  let test_clz () =
-    let x = Word.of_int64 ~width:122 0x4L in
-    let x = knowledge_of_word sigs x in
-    let y = G.clz x in
-    result y
-
-  let res () = test_clz ()
-end
