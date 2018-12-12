@@ -178,7 +178,6 @@ let make_float s e c =
   let w = Word.(concat (concat e s) c) in
   Word.to_int64_exn w |> Int64.float_of_bits
 
-
 (* let bits64 : bits64 bitv sort = Bits.define 64
  *
  * let a = Var.create bits64 "A"
