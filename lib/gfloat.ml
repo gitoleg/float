@@ -187,31 +187,16 @@ module Make(B : Theory.Basic) = struct
     let shift = B.of_int bits spec.t in
     B.low exps B.(bitv lsr shift)
 
-  let significand fsort bitv =
+  let significand fsort expn bitv =
     let open IEEE754 in
     let spec = Sort.spec fsort in
     let coef = B.low (Sort.sigs fsort) bitv in
     if spec.t = spec.p then coef
     else
-      exponent fsort bitv >=> fun expn ->
       let sigs' = Bits.define spec.p in
       let bit = Bits.define 1 in
       let leading_bit = B.(ite (is_zero expn) (zero bit) (one bit)) in
       B.append sigs' leading_bit coef
-
-  let unpack fsort bitv =
-    fsign bitv, exponent fsort bitv, significand fsort bitv
-
-  let is_inf fsort x =
-    let _,expn,coef = unpack fsort x in
-    B.(and_ (is_zero coef) (is_all_ones expn))
-
-  let is_nan fsort x =
-    let _,expn,coef = unpack fsort x in
-    B.(and_ (non_zero coef) (is_all_ones expn))
-
-  let is_special fsort x = B.or_ (is_nan fsort x) (is_inf fsort x)
-  let is_finite fsort x = B.inv (is_special fsort x)
 
   let pack fsort sign expn coef =
     let open B in
@@ -226,9 +211,21 @@ module Make(B : Theory.Basic) = struct
     let sign = ite sign (B.one bit) (B.zero bit) in
     B.append bits sign (B.append bits_1 expn coef)
 
-  (* let pack fsort sign expn coef =
-   *   let bits = IEEE754.Sort.bits fsort in
-   *   B.unsigned bits coef *)
+  let unpack fsort x f =
+    exponent fsort x >=> fun expn ->
+    significand fsort expn x >=> fun coef ->
+    f (fsign x) expn coef
+
+  let is_inf fsort x =
+    unpack fsort x @@ fun _ expn coef ->
+    B.(and_ (is_zero coef) (is_all_ones expn))
+
+  let is_nan fsort x =
+    unpack fsort x @@ fun _ expn coef ->
+    B.(and_ (non_zero coef) (is_all_ones expn))
+
+  let is_special fsort x = B.or_ (is_nan fsort x) (is_inf fsort x)
+  let is_finite fsort x = B.inv (is_special fsort x)
 
   let match_ cases ~default =
     let cases = List.rev cases in
@@ -392,8 +389,8 @@ module Make(B : Theory.Basic) = struct
   let fadd fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
-    let sign,xexpn,xcoef = unpack fsort x in
-    let _,yexpn,ycoef = unpack fsort y in
+    unpack fsort x @@ fun sign xexpn xcoef ->
+    unpack fsort y @@ fun _ yexpn ycoef ->
     let lost_bits = abs (xexpn - yexpn) in
     ite (xexpn > yexpn) xcoef (xcoef lsr lost_bits) >=> fun xcoef ->
     ite (yexpn > xexpn) ycoef (ycoef lsr lost_bits) >=> fun ycoef ->
@@ -446,9 +443,9 @@ module Make(B : Theory.Basic) = struct
   let fsub fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
-    let xsign,xexpn,xcoef = unpack fsort x in
-    let _,yexpn,ycoef = unpack fsort y  in
     let min_expn = min_exponent exps in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun _     yexpn ycoef ->
     extend xcoef ~addend:1 >=> fun xcoef ->
     extend ycoef ~addend:1 >=> fun ycoef ->
     sort xcoef >>= fun sigs' ->

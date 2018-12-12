@@ -184,7 +184,7 @@ let make_float s e c =
  * let a = Var.create bits64 "A"
  * let b = Var.create bits64 "B"
  *
- * let z = G.fsub fsort G.rne (GE.BIL.var a) (GE.BIL.var b)
+ * let z = G.fadd fsort G.rne (GE.BIL.var a) (GE.BIL.var b)
  * let _ = eval z *)
 
 let suite () =
