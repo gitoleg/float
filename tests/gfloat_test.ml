@@ -65,6 +65,7 @@ let eval x =
         | Bil.Imm w -> Some w
         | _ -> assert false
 
+
 let enum_bits w =
   let bits = Word.(enum_bits w BigEndian) in
   let b_len = Seq.length bits in
@@ -186,11 +187,31 @@ let make_float s e c =
  * let z = G.fadd fsort G.rne (GE.BIL.var a) (GE.BIL.var b)
  * let _ = eval z *)
 
+let neg x = ~-. x
+let nan = Float.nan
+let inf = Float.infinity
+let ninf = Float.neg_infinity
+let small_1 = make_float 0 0 1
+let small_2 = make_float 0 0 2
+let biggest_subnormal = make_float 0 0 0xFFFF_FFFF_FFFF_F
+
+let small_test () =
+  let (+) = G.fadd fsort G.rne in
+  let (/) = G.fdiv fsort G.rne in
+  let pi = of_float 3.14 in
+  let phi = of_float 1.61 in
+  let e = of_float 2.71 in
+  let n = of_float 3.0 in
+  let avg = to_float ((pi + phi + e) / n) in
+  let avg = to_float ((pi + phi + e) / n) in
+  match  avg with
+  | None -> printf "FAIL!!!\n"
+  | Some avg -> printf "%g\n" avg
+
+let () = small_test ()
+
+
 let suite () =
-  let neg x = ~-. x in
-  let nan = Float.nan in
-  let inf = Float.infinity in
-  let ninf = Float.neg_infinity in
 
   "Gfloat" >::: [
 
@@ -213,6 +234,8 @@ let suite () =
       "inf  + nan"    >:: inf  + nan;
       "-inf + inf"    >:: ninf + inf;
       "inf  + -inf"   >:: inf  + ninf;
+      "0.0 + small"   >:: 0.0 + small_1;
+      "small + small" >:: small_1 + small_2;
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
@@ -236,6 +259,9 @@ let suite () =
       "inf  - nan"    >:: inf  - nan;
       "-inf - inf"    >:: ninf - inf;
       "inf  - -inf"   >:: inf  - ninf;
+      "0.0 0 small"   >:: 0.0 - small_1;
+      "small - small'" >:: small_1 - small_2;
+      "small' - small" >:: small_2 - small_1;
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -254,6 +280,8 @@ let suite () =
       "inf  * nan"    >:: inf  * nan;
       "-inf * inf"    >:: ninf * inf;
       "inf  * -inf"   >:: inf  * ninf;
+      "0.0 * small"  >:: 0.0 * small_1;
+      "small * small" >:: small_1 * small_2;
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -272,15 +300,15 @@ let suite () =
       "inf  / nan"    >:: inf  / nan;
       "-inf / inf"    >:: ninf / inf;
       "inf  / -inf"   >:: inf  / ninf;
-
+      "0.0 / small"  >:: 0.0 / small_1;
+      "small / small'" >:: small_1 / small_2;
+      "small' / small" >:: small_2 / small_1;
+      "small / small" >:: small_1 / small_1;
     ]
 
 let asuite () =
-  let inf = Float.infinity in
-  let ninf = Float.neg_infinity in
-
   "test" >::: [
-      "inf case" >:: inf + ninf
+      "small * small" >:: small_1 * small_1;
     ]
 
 let result x =
@@ -300,6 +328,7 @@ let deconstruct x =
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
 
+(* let () = deconstruct (make_float 0 0 0xFFFF_FFFF_FFFF_F) *)
 (* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
 
 (* let () = deconstruct nan
