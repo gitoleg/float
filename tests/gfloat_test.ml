@@ -188,6 +188,9 @@ let make_float s e c =
 
 let suite () =
   let neg x = ~-. x in
+  let nan = Float.nan in
+  let inf = Float.infinity in
+  let ninf = Float.neg_infinity in
 
   "Gfloat" >::: [
 
@@ -201,6 +204,15 @@ let suite () =
       "-2.2 + 4.28"   >:: (neg 2.2) + 4.28;
       "0.0000001 + 0.00000002" >:: 0.0000001 + 0.00000002;
       "123213123.23434 + 56757.05656549151" >:: 123213123.23434 + 56757.05656549151;
+      "nan  + nan"    >:: nan  + nan;
+      "inf  + inf"    >:: inf  + inf;
+      "-inf + -inf"   >:: ninf + ninf;
+      "nan  + -inf"   >:: nan  + ninf;
+      "-inf + nan"    >:: ninf + nan;
+      "nan  + inf"    >:: nan  + inf;
+      "inf  + nan"    >:: inf  + nan;
+      "-inf + inf"    >:: ninf + inf;
+      "inf  + -inf"   >:: inf  + ninf;
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
@@ -215,7 +227,15 @@ let suite () =
       "0.0000001 - 0.00000002" >:: 0.0000001 - 0.00000002;
       "0.0 - 0.00000001"       >:: 0.0 - 0.0000001;
       "123213123.23434 - 56757.05656549151" >:: 123213123.23434 - 56757.05656549151;
-
+      "nan  - nan"    >:: nan  - nan;
+      "inf  - inf"    >:: inf  - inf;
+      "-inf - -inf"   >:: ninf - ninf;
+      "nan  - -inf"   >:: nan  - ninf;
+      "-inf - nan"    >:: ninf - nan;
+      "nan  - inf"    >:: nan  - inf;
+      "inf  - nan"    >:: inf  - nan;
+      "-inf - inf"    >:: ninf - inf;
+      "inf  - -inf"   >:: inf  - ninf;
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -225,6 +245,15 @@ let suite () =
       "1.0 * 0.5"    >:: 1.0 * 0.5;
       "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
       "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+      "nan  * nan"    >:: nan  * nan;
+      "inf  * inf"    >:: inf  * inf;
+      "-inf * -inf"   >:: ninf * ninf;
+      "nan  * -inf"   >:: nan  * ninf;
+      "-inf * nan"    >:: ninf * nan;
+      "nan  * inf"    >:: nan  * inf;
+      "inf  * nan"    >:: inf  * nan;
+      "-inf * inf"    >:: ninf * inf;
+      "inf  * -inf"   >:: inf  * ninf;
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -234,7 +263,24 @@ let suite () =
       "2.4 / 3.123131"  >:: 2.4 / 3.123131;
       "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
       "9991132.2131363434 / 2435.05656549151" >:: 9991132.2131363434 / 2435.05656549151;
+      "nan  / nan"    >:: nan  / nan;
+      "inf  / inf"    >:: inf  / inf;
+      "-inf / -inf"   >:: ninf / ninf;
+      "nan  / -inf"   >:: nan  / ninf;
+      "-inf / nan"    >:: ninf / nan;
+      "nan  / inf"    >:: nan  / inf;
+      "inf  / nan"    >:: inf  / nan;
+      "-inf / inf"    >:: ninf / inf;
+      "inf  / -inf"   >:: inf  / ninf;
 
+    ]
+
+let asuite () =
+  let inf = Float.infinity in
+  let ninf = Float.neg_infinity in
+
+  "test" >::: [
+      "inf case" >:: inf + ninf
     ]
 
 let result x =
@@ -253,5 +299,10 @@ let deconstruct x =
   printf "ocaml %f: bits %s, 0x%LX\n" x (string_of_bits64 x) y;
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
+
+(* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
+
+(* let () = deconstruct nan
+ * let () = deconstruct (Float.neg_infinity *. Float.neg_infinity) *)
 
 let () = run_test_tt_main (suite ())

@@ -53,8 +53,8 @@ module Rounding = struct
   let get rm =
     rm >>= fun r ->
     match Value.get rounding r with
-    | None -> !! None
-    | Some r -> !! (Some r)
+    | None -> !! Nearest_even
+    | Some r -> !! r
 end
 
 module Make(B : Theory.Basic) = struct
@@ -157,48 +157,141 @@ module Make(B : Theory.Basic) = struct
     let shift = B.of_int bits spec.t in
     B.low exps B.(bitv lsr shift)
 
-  let significand fsort expn bitv =
-    let open IEEE754 in
-    let spec = Sort.spec fsort in
-    let sigs = Bits.define spec.t in
-    let coef = B.low sigs bitv in
-    if spec.t = spec.p then coef
-    else
-      let sigs' = Bits.define spec.p in
-      let bit = Bits.define 1 in
-      let leading_bit = B.(ite (is_zero expn) (zero bit) (one bit)) in
-      B.append sigs' leading_bit coef
-
-  let pack fsort sign expn coef =
+  (* pre: input coef is already of t-bits length  *)
+  let pack_raw fsort sign expn coef =
     let open B in
     let open IEEE754 in
     let bits = Sort.bits fsort in
-    let bit = Bits.define 1 in
-    let spec = Sort.spec fsort in
-    let coef =
-      if Caml.(spec.p = spec.t) then coef
-      else
-        let sigs = Bits.define spec.t in
-        B.low sigs coef in
+    let bit  = Bits.define 1 in
     let bits_1 = Bits.define Caml.(Bits.size bits - 1) in
     let sign = ite sign (B.one bit) (B.zero bit) in
     B.append bits sign (B.append bits_1 expn coef)
 
+  let pack fsort sign expn coef =
+    let {IEEE754.p; t} = IEEE754.Sort.spec fsort in
+    if p = t then pack_raw fsort sign expn coef
+    else
+      B.low (Bits.define t) coef >=> fun coef ->
+      pack_raw fsort sign expn coef
+
+  let raw_significand fsort bitv =
+    let open IEEE754 in
+    let spec = Sort.spec fsort in
+    let sigs = Bits.define spec.t in
+    B.low sigs bitv
+
+  let finite_significand fsort expn bitv =
+    let open IEEE754 in
+    let spec = Sort.spec fsort in
+    raw_significand fsort bitv >=> fun coef ->
+    if spec.t = spec.p then coef
+    else
+      let sigs = Bits.define spec.p in
+      let bit = Bits.define 1 in
+      let leading_bit = B.(ite (is_zero expn) (zero bit) (one bit)) in
+      B.append sigs leading_bit coef
+
   let unpack fsort x f =
     exponent fsort x >=> fun expn ->
-    significand fsort expn x >=> fun coef ->
+    finite_significand fsort expn x >=> fun coef ->
     f (fsign x) expn coef
+
+  let unpack_raw fsort x f =
+    exponent fsort x >=> fun expn ->
+    raw_significand fsort x >=> fun coef ->
+    f (fsign x) expn coef
+
+  let with_sign sign bitv =
+    let open B in
+    sort bitv >>= fun s ->
+    let s' = Bits.define Caml.(Bits.size s - 1) in
+    let bit = Bits.define 1 in
+    ite sign ((append s (one bit) (zero s')) lor bitv)
+      ((append s (zero bit) (ones s')) land bitv)
+
 
   let is_inf fsort x =
     unpack fsort x @@ fun _ expn coef ->
     B.(and_ (is_zero coef) (is_all_ones expn))
 
-  let is_nan fsort x =
-    unpack fsort x @@ fun _ expn coef ->
-    B.(and_ (non_zero coef) (is_all_ones expn))
+  let is_pinf fsort x =
+    is_inf fsort x >=> fun is_inf ->
+    B.(and_ is_inf (inv (msb x)))
 
-  let is_special fsort x = B.or_ (is_nan fsort x) (is_inf fsort x)
+  let is_ninf fsort x =
+    is_inf fsort x >=> fun is_inf ->
+    B.(and_ is_inf (msb x))
+
+  let is_qnan fsort x =
+    let open B in
+    let (&&) = and_ in
+    unpack_raw fsort x @@ fun sign expn coef ->
+    is_all_ones expn && non_zero coef && msb coef
+
+  let is_snan fsort x =
+    let open B in
+    let (&&) = and_ in
+    unpack_raw fsort x @@ fun sign expn coef ->
+    is_all_ones expn && non_zero coef && inv (msb coef)
+
+  let is_nan fsort x =
+    let open B in
+    let (&&) = and_ in
+    unpack_raw fsort x @@ fun sign expn coef ->
+    is_all_ones expn && non_zero coef
+
+  let qnan fsort =
+    let open B in
+    let open IEEE754 in
+    let exps = Sort.exps fsort in
+    let spec = Sort.spec fsort in
+    let sigs = Bits.define spec.t in
+    not (ones sigs lsr one sigs) >=> fun coef ->
+    pack_raw fsort B.b1 (ones exps) coef
+
+  let snan fsort =
+    let open B in
+    let open IEEE754 in
+    let exps = Sort.exps fsort in
+    let spec = Sort.spec fsort in
+    let sigs = Bits.define spec.t in
+    pack_raw fsort B.b0 (ones exps) (B.one sigs)
+
+  (* unset a leading bit in coef, no-checks for nan are performed *)
+  let transform_to_signal fsort x =
+    let open IEEE754 in
+    let spec = Sort.spec fsort in
+    let bits = Sort.bits fsort in
+    let shift = B.of_int bits (spec.t - 1) in
+    let mask = B.(not (one bits lsl shift)) in
+    B.(x land mask)
+
+  (* set a leading bit in coef, no-checks for nan are performed *)
+  let transform_to_quite fsort x =
+    let open IEEE754 in
+    let spec = Sort.spec fsort in
+    let bits = Sort.bits fsort in
+    let shift = B.of_int bits (spec.t - 1) in
+    let mask = B.(one bits lsl shift) in
+    B.(x lor mask)
+
+  let with_special fsort x f =
+    let open B in
+    let (&&) = and_ in
+    unpack_raw fsort x @@ fun sign expn coef ->
+    is_all_ones expn >=> fun is_special ->
+    (is_special && is_zero coef) >=> fun is_inf ->
+    (is_special && non_zero coef && inv (msb coef)) >=> fun is_snan ->
+    (is_special && msb coef) >=> fun is_qnan ->
+    f ~is_inf ~is_snan ~is_qnan
+
+  let is_special fsort x = unpack fsort x @@ fun _ expn _ -> B.is_all_ones expn
   let is_finite fsort x = B.inv (is_special fsort x)
+
+  let is_zero x =
+    let open B in
+    sort x >>= fun s ->
+    is_zero ((x lsl one s) lsr one s)
 
   let precision fsort = let {IEEE754.p} = IEEE754.Sort.spec fsort in p
   let bias fsort = let {IEEE754.bias} = IEEE754.Sort.spec fsort in bias
@@ -217,9 +310,6 @@ module Make(B : Theory.Basic) = struct
     let mask = not (ones sort lsl n)  in
     x land mask
 
-  let rshift_coef coef n =
-    B.(coef lsr n), extract_last coef n
-
   let half_of_loss loss lost_bits =
     let open B in
     loss >>= fun vloss ->
@@ -237,12 +327,12 @@ module Make(B : Theory.Basic) = struct
     let loss = extract_last loss lost_bits in
     let half = half_of_loss loss lost_bits in
     let is_needed = match rm with
-      | Some Positive_inf -> B.inv sign
-      | Some Negative_inf -> sign
-      | Some Nearest_away -> loss >= half
-      | Some Nearest_even ->
+      | Positive_inf -> B.inv sign
+      | Negative_inf -> sign
+      | Nearest_away -> loss >= half
+      | Nearest_even ->
          or_ (loss > half) (and_ (loss = half) (lsb coef))
-      | _ -> b0 in
+      | Towards_zero -> b0 in
     let is_needed = and_ (non_zero lost_bits) is_needed in
     let all_ones = not (zero sigs) in
     ite (and_ (coef <> all_ones) is_needed) (succ coef) coef
@@ -321,15 +411,14 @@ module Make(B : Theory.Basic) = struct
   let minimize_exponent = safe_align_left
   let norm = safe_align_left
 
-   (* returns result sign *)
-  let xor_sign s s' = B.(and_ (or_ s s') (inv (and_ s s')))
+  let xor s s' = B.(and_ (or_ s s') (inv (and_ s s')))
 
   (** [combine_loss more_significant less_significant length_of_less ] *)
   let combine_loss more less length_of_less =
     let more = B.(more lsl length_of_less) in
     B.(more lor less)
 
-  let fadd fsort rm x y =
+  let fadd_finite fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
     unpack fsort x @@ fun sign xexpn xcoef ->
@@ -347,12 +436,12 @@ module Make(B : Theory.Basic) = struct
           (xexpn > yexpn) --> extract_last ycoef lost_bits;
       ] ~default:(extract_last xcoef lost_bits) >=> fun loss ->
     extract_last coef (one sigs) >=> fun loss' ->
-    coef >= xcoef >=> fun no_overflow ->
-    ite no_overflow lost_bits (succ lost_bits) >=> fun lost_bits ->
-    ite no_overflow loss (combine_loss loss' loss lost_bits) >=> fun loss ->
-    ite no_overflow coef (coef lsr one sigs) >=> fun coef ->
+    coef < xcoef >=> fun coef_overflow ->
+    ite coef_overflow (succ lost_bits) lost_bits >=> fun lost_bits ->
+    ite coef_overflow (combine_loss loss' loss lost_bits) loss >=> fun loss ->
+    ite coef_overflow (coef lsr one sigs) coef >=> fun coef ->
     one sigs lsl (of_int sigs Caml.(Bits.size sigs - 1)) >=> fun leading_one ->
-    ite no_overflow coef (coef lor leading_one) >=> fun coef ->
+    ite coef_overflow (coef lor leading_one) coef >=> fun coef ->
     round rm sign coef loss lost_bits >=> fun coef ->
     norm expn coef >>= fun (expn,coef) ->
     pack fsort sign expn coef
@@ -382,7 +471,7 @@ module Make(B : Theory.Basic) = struct
       (x >$ y) --> on_gt;
     ] ~default:on_lt
 
-  let fsub fsort rm x y =
+  let fsub_finite fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
     let min_expn = min_exponent exps in
@@ -423,13 +512,36 @@ module Make(B : Theory.Basic) = struct
     norm expn coef >>= fun (expn,coef) ->
     pack fsort sign expn coef
 
-let add_or_sub ~is_sub fsort rm x y =
-    let ( lxor ) = xor_sign in
+  let fsum_special fsort is_sub x y =
+    let open B in
+    let (&&) = and_ in
+    let (||) = or_  in
+    let not = inv in
+    with_special fsort x @@ fun ~is_inf:xinf ~is_snan:xsnan ~is_qnan:xqnan ->
+    with_special fsort y @@ fun ~is_inf:yinf ~is_snan:ysnan ~is_qnan:yqnan ->
+    (xsnan || xqnan) >=> fun xnan ->
+    (ysnan || yqnan) >=> fun ynan ->
+    fsign x  >=> fun xsign ->
+    fsign y  >=> fun ysign ->
+    (xinf && yinf) >=> fun is_inf ->
+       match_ [
+       (is_sub && is_inf) --> qnan fsort;
+       (xinf && yinf) --> x;
+       (xnan && (not ynan)) --> transform_to_quite fsort x;
+       (ynan && (not xnan)) --> transform_to_quite fsort y;
+    ] ~default:(transform_to_quite fsort x)
+
+  let add_or_sub ~is_sub fsort rm x y =
+    let open B in
+    let (&&) = and_ in
+    let ( lxor ) = xor in
     let s1 = is_sub in
     let s2 = fsign x in
     let s3 = fsign y in
     let is_sub = s1 lxor (s2 lxor s3) in
-    B.ite is_sub (fsub fsort rm x y) (fadd fsort rm x y)
+    ite (is_finite fsort x && is_finite fsort y)
+      (B.ite is_sub (fsub_finite fsort rm x y) (fadd_finite fsort rm x y))
+      (fsum_special fsort is_sub x y)
 
   let fsub fsort rm x y = add_or_sub ~is_sub:B.b1 fsort rm x y
   let fadd fsort rm x y = add_or_sub ~is_sub:B.b0 fsort rm x y
@@ -438,7 +550,7 @@ let add_or_sub ~is_sub fsort rm x y =
     sort bitv >>= fun sort ->
     extend bitv ~addend:(Bits.size sort)
 
-  let fmul fsort rm x y =
+  let fmul_finite fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
     unpack fsort x @@ fun xsign xexpn xcoef ->
@@ -451,7 +563,7 @@ let add_or_sub ~is_sub fsort rm x y =
     sort xcoef >>= fun sigs' ->
     xexpn + yexpn - of_int exps' (bias fsort) >=> fun expn ->
     xcoef * ycoef >=> fun coef ->
-    xor_sign xsign ysign >=> fun sign ->
+    xor xsign ysign >=> fun sign ->
     clz coef >=> fun clz ->
     of_int sigs' (precision fsort) >=> fun prec ->
     ite (clz >= prec) (zero sigs') (prec - clz) >=> fun shift ->
@@ -465,6 +577,28 @@ let add_or_sub ~is_sub fsort rm x y =
     norm expn coef >>= fun (expn,coef) ->
     pack fsort sign expn coef
 
+  let fmul_special fsort x y =
+    let open B in
+    let (&&) = and_ in
+    let (||) = or_  in
+    with_special fsort x @@ fun ~is_inf:xinf ~is_snan:xsnan ~is_qnan:xqnan ->
+    with_special fsort y @@ fun ~is_inf:yinf ~is_snan:ysnan ~is_qnan:yqnan ->
+    fsign x >=> fun xsign ->
+    fsign y >=> fun ysign ->
+    (xinf && yinf) >=> fun is_inf ->
+    match_ [
+      (is_zero x && yinf) --> qnan fsort;
+      (is_zero y && xinf) --> qnan fsort;
+      is_inf --> with_sign (xor xsign ysign) x;
+      (xsnan || xqnan) --> transform_to_quite fsort x
+    ] ~default:(transform_to_quite fsort y)
+
+  let fmul fsort rm x y =
+    let (&&) = B.and_ in
+    B.ite (is_finite fsort x && is_finite fsort y)
+      (fmul_finite fsort rm x y)
+      (fmul_special fsort x y)
+
   let mask_bit sort i =
     let uno = B.one sort in
     let shf = B.of_int sort i in
@@ -476,21 +610,20 @@ let add_or_sub ~is_sub fsort rm x y =
     let rec loop i bits nomin =
       if Caml.(i < 0) then
         List.fold bits ~f:(lor) ~init:(zero sort) >=> fun coef ->
-        let loss = match_ [
+        match_ [
             (nomin > denom) --> Lost.alot sort;
             (nomin = denom) --> Lost.half sort;
             (nomin = zero sort) --> Lost.zero sort;
-         ] ~default:(Lost.afew sort) in
+         ] ~default:(Lost.afew sort) >=> fun loss ->
         round rm sign coef loss (Lost.bits sort)
       else
-        let next_nomin = ite (nomin > denom) (nomin - denom) nomin in
-        let bit = ite (nomin > denom) (mask_bit sort i) (zero sort) in
-        let bits = bit :: bits in
+        ite (nomin > denom) (nomin - denom) nomin >=> fun next_nomin ->
+        ite (nomin > denom) (mask_bit sort i) (zero sort) >=> fun bit ->
         bind next_nomin (fun next_nomin ->
-          loop Caml.(i - 1) bits (next_nomin lsl one sort)) in
+          loop Caml.(i - 1) (bit :: bits) (next_nomin lsl one sort)) in
     loop Caml.(prec - 1) [] nomin
 
-  let fdiv fsort rm x y =
+  let fdiv_finite fsort rm x y =
     let open B in
     let prec = precision fsort in
     let exps,sigs = floats fsort in
@@ -499,7 +632,7 @@ let add_or_sub ~is_sub fsort rm x y =
     extend xcoef ~addend:1 >=> fun xcoef ->
     extend ycoef ~addend:1 >=> fun ycoef ->
     sort xcoef >>= fun sigs' ->
-    xor_sign xsign ysign >=> fun sign ->
+    xor xsign ysign >=> fun sign ->
     ite (xcoef < ycoef) (xcoef lsl one sigs') xcoef >=> fun nomin ->
     long_division prec rm sign nomin ycoef >=> fun coef ->
     unsigned sigs coef >=> fun coef ->
@@ -507,5 +640,27 @@ let add_or_sub ~is_sub fsort rm x y =
     xexpn - yexpn - dexpn + of_int exps (bias fsort) >=> fun expn ->
     norm expn coef >>= fun (expn,coef) ->
     pack fsort sign expn coef
+
+  let fdiv_special fsort x y =
+    let open B in
+    let (&&) = and_ in
+    let (||) = or_  in
+    with_special fsort x @@ fun ~is_inf:xinf ~is_snan:xsnan ~is_qnan:xqnan ->
+    with_special fsort y @@ fun ~is_inf:yinf ~is_snan:ysnan ~is_qnan:yqnan ->
+    fsign x >=> fun xsign ->
+    fsign y >=> fun ysign ->
+    (xinf && yinf) >=> fun is_inf ->
+    match_ [
+      (is_zero x && is_zero y) --> qnan fsort;
+      (xinf && yinf) --> qnan fsort;
+      is_inf --> with_sign (xor xsign ysign) x;
+      (xsnan || xqnan) --> transform_to_quite fsort x
+    ] ~default:(transform_to_quite fsort y)
+
+  let fdiv fsort rm x y =
+    let (&&) = B.and_ in
+    B.ite (is_finite fsort x && is_finite fsort y)
+      (fdiv_finite fsort rm x y)
+      (fdiv_special fsort x y)
 
 end
