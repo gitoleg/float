@@ -417,7 +417,6 @@ module Make(B : Theory.Basic) = struct
     clz coef >=> fun clz ->
     min clz (unsigned sigs (abs (expn - min_expn)))
 
-  (* TODO: consider test coef for zero to prevent expn change *)
   let norm expn coef =
     let open B in
     sort expn >>= fun exps ->
@@ -448,6 +447,7 @@ module Make(B : Theory.Basic) = struct
     let more = B.(more lsl length_of_less) in
     B.(more lor less)
 
+  (* TODO: handle rounding overflow *)
   let fadd_finite fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
@@ -504,6 +504,7 @@ module Make(B : Theory.Basic) = struct
       (x >$ y) --> on_gt;
     ] ~default:on_lt
 
+  (* TODO: handle rounding overflow *)
   let fsub_finite fsort rm x y =
     let open B in
     let exps,sigs = floats fsort in
@@ -583,6 +584,14 @@ module Make(B : Theory.Basic) = struct
     sort bitv >>= fun sort ->
     extend bitv ~addend:(Bits.size sort)
 
+  let normalize_coef exps coef f =
+    let open B in
+    clz coef >=> fun clz ->
+    coef lsl clz >=> fun coef ->
+    unsigned exps clz >=> fun dexpn ->
+    f coef dexpn
+
+  (* TODO: handle rounding overflow *)
   let fmul_finite fsort rm x y =
     let open B in
     let double e c f =
@@ -591,6 +600,9 @@ module Make(B : Theory.Basic) = struct
     let maxe = max_exponent' (Bits.size exps) in
     unpack fsort x @@ fun xsign xexpn xcoef ->
     unpack fsort y @@ fun ysign yexpn ycoef ->
+    (* normalize_coef exps xcoef @@ fun xcoef dexpnx ->
+     * normalize_coef exps ycoef @@ fun ycoef dexpny ->
+     * abs (dexpnx - dexpny) >=> fun de -> *)
     double xexpn xcoef @@ fun xexpn xcoef ->
     double yexpn ycoef @@ fun yexpn ycoef ->
     sort xexpn >>= fun exps' ->
@@ -649,12 +661,12 @@ module Make(B : Theory.Basic) = struct
     let shf = B.of_int sort i in
     B.(uno lsl shf)
 
-  (* pre: nominator >= denominator
+  (* pre: nominator > denominator
      the msb of result can be 1 only (and only) in rare
      case of applying rounding to 01111..11. And we need to
      to check msb manually, since rounding itself
      will no help us.  *)
-  let long_division prec rm sign nomin denom f =
+  let long_division prec rm sign nomin denom =
     let open B in
     sort nomin >>= fun sort ->
     let rec loop i bits nomin =
@@ -665,7 +677,8 @@ module Make(B : Theory.Basic) = struct
             (nomin = denom) --> Lost.half sort;
             (nomin = zero sort) --> Lost.zero sort;
          ] ~default:(Lost.afew sort) >=> fun loss ->
-        round rm sign coef loss (Lost.bits sort) @@ f
+        round rm sign coef loss (Lost.bits sort) @@ fun coef _ ->
+        coef
       else
         ite (nomin > denom) (mask_bit sort i) (zero sort) >=> fun bit ->
         ite (nomin > denom) (nomin - denom) nomin >=> fun next_nomin ->
@@ -673,17 +686,6 @@ module Make(B : Theory.Basic) = struct
         bind next_nomin (fun next_nomin ->
           loop Caml.(i - 1) (bit :: bits) next_nomin) in
     loop Caml.(prec - 1) [] nomin
-
-  let normalize_coef exps coef f =
-    let open B in
-    clz coef >=> fun clz ->
-    coef lsl clz >=> fun coef ->
-    unsigned exps clz >=> fun dexpn ->
-    f coef dexpn
-
-  let apack fsort sign expn coef =
-    let bits = IEEE754.Sort.bits fsort in
-    B.unsigned bits expn
 
   let fdiv_finite fsort rm x y =
     let open B in
@@ -699,18 +701,22 @@ module Make(B : Theory.Basic) = struct
     xor xsign ysign >=> fun sign ->
     normalize_coef exps xcoef @@ fun nomin dexpnx ->
     normalize_coef exps ycoef @@ fun denom dexpny ->
-    xexpn - yexpn - dexpnx + dexpny >=> fun expn ->
     extend nomin ~addend:1 >=> fun nomin ->
     extend denom ~addend:1 >=> fun denom ->
-    norm_nominator exps nomin denom @@ fun nomin dexpn ->
-    long_division prec rm sign nomin denom @@ fun coef _ ->
-    msb coef >=> fun is_overflow ->
-    ite is_overflow (one exps) (zero exps) >=> fun from_rnd ->
-    ite is_overflow (coef lsr one sigs) coef >=> fun coef ->
+    norm_nominator exps nomin denom @@ fun nomin dexpn' ->
+    long_division prec rm sign nomin denom >=> fun coef ->
+    msb coef >=> fun coef_overflow ->
+    ite coef_overflow (coef lsr one sigs) coef >=> fun coef ->
+    ite coef_overflow (one exps) (zero exps) >=> fun from_rnd ->
     unsigned sigs coef >=> fun coef ->
-    expn - dexpn + from_rnd + of_int exps (bias fsort) >=> fun expn ->
-    norm expn coef >>= fun (expn,coef) ->
-    pack fsort sign expn coef
+    of_int exps (bias fsort) >=> fun bias ->
+    dexpny + from_rnd - dexpnx - dexpn' >=> fun dexpn ->
+    xexpn - yexpn >=> fun expn ->
+    and_ (xexpn > yexpn) (expn > dexpn + bias) >=> fun is_overflow ->
+    expn + dexpn + bias  >=> fun expn ->
+    ite is_overflow (inf fsort sign)
+      (norm expn coef >>= fun (expn,coef) ->
+       pack fsort sign expn coef)
 
   let fdiv_special fsort x y =
     let open B in

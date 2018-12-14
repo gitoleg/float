@@ -260,10 +260,16 @@ void mysin(double a) {
 
 
 void test() {
-    apf a(APFloatBase::IEEEquad(), APInt(128, 4602688819172646912L));
-    apf b(APFloatBase::IEEEquad(), APInt(128, 2L));
-    a.divide(b, APFloatBase::rmNearestTiesToEven);
-    std::cout << std::boolalpha << "res " << a.isFiniteNonZero() << std::endl;
+
+    apf a(APFloatBase::IEEEdouble(), APInt(64, 0xFFFFFFFFFFFFFL));
+    apf b(APFloatBase::IEEEdouble(), APInt(64, 0x1L));
+    a.add(b, APFloatBase::rmNearestTiesToEven);
+    std::cout << std::boolalpha << "res " << a.isNormal() << std::endl;
+
+    // apf a(APFloatBase::IEEEquad(), APInt(128, 4602688819172646912L));
+    // apf b(APFloatBase::IEEEquad(), APInt(128, 2L));
+    // a.divide(b, APFloatBase::rmNearestTiesToEven);
+    // std::cout << std::boolalpha << "res " << a.isFiniteNonZero() << std::endl;
 //    std::cout << "res is " << a.convertToDouble() << std::endl;
 
     // double cc = my_sqrt(bb);

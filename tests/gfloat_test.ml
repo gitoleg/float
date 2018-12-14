@@ -294,6 +294,7 @@ let suite () =
       "smalles_norm * small" >:: smallest_normal * smallest_nonzero;
       "biggest_sub * small"   >:: biggest_subnormal * smallest_nonzero;
       "biggest_normal * small"  >:: biggest_normal * smallest_nonzero;
+      "biggest_normal * 2.0"  >:: biggest_normal * 2.0;
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -321,10 +322,12 @@ let suite () =
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
     ]
 
-let suite () =
+let asuite () =
   "test" >::: [
-      (* "biggest_nrom / small"  >:: biggest_normal / smallest_nonzero; *)
-      "smalles_norm / small" >:: smallest_normal / smallest_nonzero;
+      "biggest_normal * small"  >:: biggest_normal * biggest_subnormal;
+      (* "aa" >:: 3.0 / 32.0; *)
+      (* "biggest_norm / small"  >:: biggest_normal / smallest_nonzero; *)
+      (* "smalles_norm / small" >:: smallest_normal / smallest_nonzero; *)
     ]
 
 let result x =
@@ -343,9 +346,6 @@ let deconstruct x =
   printf "ocaml %f: bits %s, 0x%LX\n" x (string_of_bits64 x) y;
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
-
-
-let () = deconstruct 1.0
 
 (* let () = deconstruct (make_float 0 0 0xFFFF_FFFF_FFFF_F) *)
 (* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
