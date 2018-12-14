@@ -3,6 +3,11 @@ open Bap_core_theory
 
 type 'a t = 'a knowledge
 
+
+type ('b, 'e, 't, 's) unop =
+  ((('b,'e,'t) IEEE754.t,'s) format float sort ->
+   rmode value t -> 's bitv value t -> 's bitv value t)
+
 type ('b, 'e, 't, 's) binop =
   ((('b,'e,'t) IEEE754.t,'s) format float sort ->
    rmode value t -> 's bitv value t -> 's bitv value t -> 's bitv value t)
@@ -20,5 +25,7 @@ module Make(B : Theory.Basic) : sig
   val fsub : ('b, 'e, 't, 's) binop
   val fmul : ('b, 'e, 't, 's) binop
   val fdiv : ('b, 'e, 't, 's) binop
+
+  val fsqrt :  ('b, 'e, 't, 's) unop
 
 end

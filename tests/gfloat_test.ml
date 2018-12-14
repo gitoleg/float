@@ -176,8 +176,8 @@ let make_float s e c =
   let s = Word.of_int ~width:1 s in
   let e = Word.of_int ~width:11 e in
   let c = Word.of_int ~width:52 c in
-  let w = Word.(concat (concat e s) c) in
-  Word.to_int64_exn w |> Int64.float_of_bits
+  let w = Word.(concat (concat s e) c) in
+  Word.signed w |> Word.to_int64_exn |> Int64.float_of_bits
 
 (* let bits64 : bits64 bitv sort = Bits.define 64
  *
@@ -191,9 +191,12 @@ let neg x = ~-. x
 let nan = Float.nan
 let inf = Float.infinity
 let ninf = Float.neg_infinity
-let small_1 = make_float 0 0 1
-let small_2 = make_float 0 0 2
+let smallest_nonzero = make_float 0 0 1
+let some_small = make_float 0 0 2
 let biggest_subnormal = make_float 0 0 0xFFFF_FFFF_FFFF_F
+let smallest_normal = Float.(biggest_subnormal + smallest_nonzero)
+let biggest_normal = make_float 0 2046 0xFFFF_FFFF_FFFF_F
+
 
 let small_test () =
   let (+) = G.fadd fsort G.rne in
@@ -202,7 +205,6 @@ let small_test () =
   let phi = of_float 1.61 in
   let e = of_float 2.71 in
   let n = of_float 3.0 in
-  let avg = to_float ((pi + phi + e) / n) in
   let avg = to_float ((pi + phi + e) / n) in
   match  avg with
   | None -> printf "FAIL!!!\n"
@@ -234,8 +236,11 @@ let suite () =
       "inf  + nan"    >:: inf  + nan;
       "-inf + inf"    >:: ninf + inf;
       "inf  + -inf"   >:: inf  + ninf;
-      "0.0 + small"   >:: 0.0 + small_1;
-      "small + small" >:: small_1 + small_2;
+      "0.0 + small"   >:: 0.0 + smallest_nonzero;
+      "small + small" >:: smallest_nonzero + some_small;
+      "biggest_sub + small"  >:: biggest_subnormal + smallest_nonzero;
+      "biggest_sub + small"   >:: biggest_subnormal + smallest_nonzero;
+      "biggest_normal + small"  >:: biggest_normal + smallest_nonzero;
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
@@ -259,9 +264,13 @@ let suite () =
       "inf  - nan"    >:: inf  - nan;
       "-inf - inf"    >:: ninf - inf;
       "inf  - -inf"   >:: inf  - ninf;
-      "0.0 0 small"   >:: 0.0 - small_1;
-      "small - small'" >:: small_1 - small_2;
-      "small' - small" >:: small_2 - small_1;
+      "0.0 0 small"   >:: 0.0 - smallest_nonzero;
+      "small - small"  >:: smallest_nonzero - smallest_nonzero;
+      "small - small'" >:: smallest_nonzero - some_small;
+      "small' - small" >:: some_small - smallest_nonzero;
+      "smalles_norm - small" >:: smallest_normal - smallest_nonzero;
+      "biggest_sub - small"   >:: biggest_subnormal - smallest_nonzero;
+      "biggest_normal - small"  >:: biggest_normal - smallest_nonzero;
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -280,8 +289,11 @@ let suite () =
       "inf  * nan"    >:: inf  * nan;
       "-inf * inf"    >:: ninf * inf;
       "inf  * -inf"   >:: inf  * ninf;
-      "0.0 * small"  >:: 0.0 * small_1;
-      "small * small" >:: small_1 * small_2;
+      "0.0 * small"  >:: 0.0 * smallest_nonzero;
+      "small * small" >:: smallest_nonzero * some_small;
+      "smalles_norm * small" >:: smallest_normal * smallest_nonzero;
+      "biggest_sub * small"   >:: biggest_subnormal * smallest_nonzero;
+      "biggest_normal * small"  >:: biggest_normal * smallest_nonzero;
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -300,15 +312,19 @@ let suite () =
       "inf  / nan"    >:: inf  / nan;
       "-inf / inf"    >:: ninf / inf;
       "inf  / -inf"   >:: inf  / ninf;
-      "0.0 / small"  >:: 0.0 / small_1;
-      "small / small'" >:: small_1 / small_2;
-      "small' / small" >:: small_2 / small_1;
-      "small / small" >:: small_1 / small_1;
+      "0.0  / small"  >:: 0.0 / smallest_nonzero;
+      "small  / small'" >:: smallest_nonzero / some_small;
+      "small' / small" >:: some_small / smallest_nonzero;
+      "small  / small" >:: smallest_nonzero / smallest_nonzero;
+      "smallest_norm / small" >:: smallest_normal / smallest_nonzero;
+      "biggest_sub / small"   >:: biggest_subnormal / smallest_nonzero;
+      "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
     ]
 
-let asuite () =
+let suite () =
   "test" >::: [
-      "small * small" >:: small_1 * small_1;
+      (* "biggest_nrom / small"  >:: biggest_normal / smallest_nonzero; *)
+      "smalles_norm / small" >:: smallest_normal / smallest_nonzero;
     ]
 
 let result x =
@@ -328,10 +344,13 @@ let deconstruct x =
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
 
+
+let () = deconstruct 1.0
+
 (* let () = deconstruct (make_float 0 0 0xFFFF_FFFF_FFFF_F) *)
 (* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
 
 (* let () = deconstruct nan
  * let () = deconstruct (Float.neg_infinity *. Float.neg_infinity) *)
 
-let () = run_test_tt_main (suite ())
+let  () = run_test_tt_main (suite ())
