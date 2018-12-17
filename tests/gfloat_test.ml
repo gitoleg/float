@@ -239,8 +239,9 @@ let suite () =
       "0.0 + small"   >:: 0.0 + smallest_nonzero;
       "small + small" >:: smallest_nonzero + some_small;
       "biggest_sub + small"  >:: biggest_subnormal + smallest_nonzero;
-      "biggest_sub + small"   >:: biggest_subnormal + smallest_nonzero;
       "biggest_normal + small"  >:: biggest_normal + smallest_nonzero;
+      "biggest_normal + biggest_subnorm"  >:: biggest_normal + biggest_subnormal;
+
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
@@ -271,6 +272,9 @@ let suite () =
       "smalles_norm - small" >:: smallest_normal - smallest_nonzero;
       "biggest_sub - small"   >:: biggest_subnormal - smallest_nonzero;
       "biggest_normal - small"  >:: biggest_normal - smallest_nonzero;
+      "biggest_normal - biggest_subnorm"  >:: biggest_normal - biggest_subnormal;
+      "biggest_subnorm - biggest_normal"  >:: biggest_subnormal - biggest_normal;
+
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -291,10 +295,12 @@ let suite () =
       "inf  * -inf"   >:: inf  * ninf;
       "0.0 * small"  >:: 0.0 * smallest_nonzero;
       "small * small" >:: smallest_nonzero * some_small;
-      "smalles_norm * small" >:: smallest_normal * smallest_nonzero;
-      "biggest_sub * small"   >:: biggest_subnormal * smallest_nonzero;
+      "smalles_norm * small"    >:: smallest_normal * smallest_nonzero;
+      "biggest_sub * small"     >:: biggest_subnormal * smallest_nonzero;
       "biggest_normal * small"  >:: biggest_normal * smallest_nonzero;
-      "biggest_normal * 2.0"  >:: biggest_normal * 2.0;
+      "biggest_normal * 2.0"    >:: biggest_normal * 2.0;
+      "biggest_normal * biggest subnormal"  >:: biggest_normal * biggest_subnormal;
+
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -320,11 +326,22 @@ let suite () =
       "smallest_norm / small" >:: smallest_normal / smallest_nonzero;
       "biggest_sub / small"   >:: biggest_subnormal / smallest_nonzero;
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
+      "biggest_normal / bigget_subnorm"  >:: biggest_normal / biggest_subnormal;
     ]
+
+
+let a () =
+  printf "input\n%s\n%s\n"
+    (string_of_bits64 biggest_subnormal)
+    (string_of_bits64 biggest_normal)
 
 let asuite () =
   "test" >::: [
-      "biggest_normal * small"  >:: biggest_normal * biggest_subnormal;
+      "biggest_subnorm - biggest_normal"  >:: biggest_subnormal - biggest_normal;
+      (* "biggest_normal * biggest subnormal"  >:: biggest_normal * biggest_subnormal; *)
+      (* "small * small" >:: smallest_nonzero * some_small;
+       * "smalles_norm / small" >:: smallest_normal / smallest_nonzero; *)
+      (* "biggest_normal * small"  >:: biggest_normal * biggest_subnormal; *)
       (* "aa" >:: 3.0 / 32.0; *)
       (* "biggest_norm / small"  >:: biggest_normal / smallest_nonzero; *)
       (* "smalles_norm / small" >:: smallest_normal / smallest_nonzero; *)
