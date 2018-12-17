@@ -337,14 +337,7 @@ let a () =
 
 let asuite () =
   "test" >::: [
-      "biggest_subnorm - biggest_normal"  >:: biggest_subnormal - biggest_normal;
-      (* "biggest_normal * biggest subnormal"  >:: biggest_normal * biggest_subnormal; *)
-      (* "small * small" >:: smallest_nonzero * some_small;
-       * "smalles_norm / small" >:: smallest_normal / smallest_nonzero; *)
-      (* "biggest_normal * small"  >:: biggest_normal * biggest_subnormal; *)
-      (* "aa" >:: 3.0 / 32.0; *)
-      (* "biggest_norm / small"  >:: biggest_normal / smallest_nonzero; *)
-      (* "smalles_norm / small" >:: smallest_normal / smallest_nonzero; *)
+       "biggest_normal  biggest_subnorm"  >:: biggest_normal - biggest_subnormal;
     ]
 
 let result x =
