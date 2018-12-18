@@ -265,7 +265,8 @@ let suite () =
       "inf  - nan"    >:: inf  - nan;
       "-inf - inf"    >:: ninf - inf;
       "inf  - -inf"   >:: inf  - ninf;
-      "0.0 0 small"   >:: 0.0 - smallest_nonzero;
+      "0.0 - small"   >:: 0.0 - smallest_nonzero;
+      "small - 0.0"   >:: smallest_nonzero - 0.0;
       "small - small"  >:: smallest_nonzero - smallest_nonzero;
       "small - small'" >:: smallest_nonzero - some_small;
       "small' - small" >:: some_small - smallest_nonzero;
@@ -294,6 +295,7 @@ let suite () =
       "-inf * inf"    >:: ninf * inf;
       "inf  * -inf"   >:: inf  * ninf;
       "0.0 * small"  >:: 0.0 * smallest_nonzero;
+      "2.0 * small"  >:: 2.0 * smallest_nonzero;
       "small * small" >:: smallest_nonzero * some_small;
       "smalles_norm * small"    >:: smallest_normal * smallest_nonzero;
       "biggest_sub * small"     >:: biggest_subnormal * smallest_nonzero;
@@ -326,18 +328,17 @@ let suite () =
       "smallest_norm / small" >:: smallest_normal / smallest_nonzero;
       "biggest_sub / small"   >:: biggest_subnormal / smallest_nonzero;
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
-      "biggest_normal / bigget_subnorm"  >:: biggest_normal / biggest_subnormal;
+      "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
+      "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
     ]
 
 
-let a () =
-  printf "input\n%s\n%s\n"
-    (string_of_bits64 biggest_subnormal)
-    (string_of_bits64 biggest_normal)
-
-let asuite () =
+let axssuite () =
   "test" >::: [
-       "biggest_normal  biggest_subnorm"  >:: biggest_normal - biggest_subnormal;
+           (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
+      "2.0 * small"  >:: 2.0 * smallest_nonzero;
+      "biggest_normal * biggest_subnorm"  >:: biggest_normal * biggest_subnormal;
+      "biggest_normal * small"  >:: biggest_normal * smallest_nonzero;
     ]
 
 let result x =
@@ -357,7 +358,7 @@ let deconstruct x =
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
 
-(* let () = deconstruct (make_float 0 0 0xFFFF_FFFF_FFFF_F) *)
+(* let () = deconstruct 2.0 *)
 (* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
 
 (* let () = deconstruct nan
