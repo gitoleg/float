@@ -65,7 +65,6 @@ let eval x =
         | Bil.Imm w -> Some w
         | _ -> assert false
 
-
 let enum_bits w =
   let bits = Word.(enum_bits w BigEndian) in
   let b_len = Seq.length bits in
@@ -202,17 +201,18 @@ let small_test () =
   | None -> printf "FAIL!!!\n"
   | Some avg -> printf "%g\n" avg
 
-let () = small_test ()
+let a () = small_test ()
 
 let gfloat_of_int x =
-  let bits = Word.of_int ~width:53 x in
-  knowledge_of_word sigs bits
+  let bits = Word.of_int ~width:64 x in
+  let bitv = knowledge_of_word bitv bits in
+  G.cast_float fsort bitv
 
 let of_uint x ctxt =
   let ops = sprintf "cast to float %d\n" x in
   let real = float x in
   let bitv = gfloat_of_int x in
-  let ours = G.cast_float fsort bitv |> to_float in
+  let ours = to_float bitv in
   match ours with
   | None -> assert_bool (sprintf "result is none %s" ops) false
   | Some ours ->
@@ -245,6 +245,18 @@ let to_int x ctxt =
      let w = Word.to_int64_exn (Word.signed w) in
      check (Some w)
 
+let small_test () =
+  let x = gfloat_of_int 3 in
+  let y = gfloat_of_int 4 in
+  let z = G.fadd fsort G.rne x y in
+  let w = G.cast_int fsort bitv z in
+  match eval w with
+  | None -> printf "fail!!\n"
+  | Some r -> printf "myres %d\n" (Word.to_int_exn r)
+
+let a () = small_test ()
+
+
 let suite () =
 
   "Gfloat" >::: [
@@ -258,6 +270,7 @@ let suite () =
       "of uint 13213" >:: of_uint 13213;
       "of uint 45676" >:: of_uint 45667;
       "of uint 98236723" >:: of_uint 98236723;
+      "of uint 0xFFFF_FFFF_FFFF_FFF" >:: of_uint 0xFFFF_FFFF_FFFF_FFF;
 
       (* of sint *)
       "of sint -42" >:: of_sint (-42);
@@ -398,13 +411,16 @@ let suite () =
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
     ]
 
+(* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
 
-let axssuite () =
+let asuite () =
   "test" >::: [
-           (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
-      "2.0 * small"  >:: 2.0 * smallest_nonzero;
-      "biggest_normal * biggest_subnorm"  >:: biggest_normal * biggest_subnormal;
-      "biggest_normal * small"  >:: biggest_normal * smallest_nonzero;
+      "of uint 0xFFFF_FFFF_FFFF_FFF" >:: of_uint 0xFFFF_FFFF_FFFF_FFF;
+      (* "of uint 42" >:: of_uint 42; *)
+      (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
+      (* "2.0 * small"  >:: 2.0 * smallest_nonzero;
+       * "biggest_normal * biggest_subnorm"  >:: biggest_normal * biggest_subnormal;
+       * "biggest_normal * small"  >:: biggest_normal * smallest_nonzero; *)
     ]
 
 let result x =

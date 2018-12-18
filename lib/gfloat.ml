@@ -413,16 +413,14 @@ module Make(B : Theory.Basic) = struct
     let rec loop lets x = function
       | [] -> List.fold lets ~f:B.(+) ~init:(B.zero sort)
       | (total, shift) :: shifts ->
-        let shift = B.of_int sort shift in
-        let total = B.of_int sort total in
-        let mask = B.(ones sort' lsl total) in
-        let nextx = B.(ite (is_zero (x land mask)) (x lsl shift) x) in
-        let nextn = B.(ite (is_zero (x land mask)) shift (B.zero sort)) in
-        bind nextx @@ fun nextx ->
-        bind nextn @@ fun nextn ->
+        B.of_int sort shift >=> fun shift ->
+        B.of_int sort total >=> fun total ->
+        B.(ones sort' lsl total) >=> fun mask ->
+        B.(ite (is_zero (x land mask)) (x lsl shift) x) >=> fun nextx ->
+        B.(ite (is_zero (x land mask)) shift (B.zero sort)) >=> fun nextn ->
         loop (nextn :: lets) nextx shifts in
-    let n = loop [] x' shifts in
-    let dif = B.of_int sort (num - size) in
+    loop [] x' shifts >=> fun n ->
+    B.of_int sort (num - size) >=> fun dif ->
     B.ite (B.is_zero x) (B.of_int sort size) B.(n - dif)
 
   let possible_shift expn coef =
@@ -435,16 +433,16 @@ module Make(B : Theory.Basic) = struct
     ite (clz < diff) clz diff >=> fun diff ->
     ite (diff > zero sigs) diff (zero sigs)
 
-  let norm expn coef =
+  let norm expn coef f =
     let open B in
     sort expn >>= fun exps ->
     sort coef >>= fun sigs ->
-    let shift = possible_shift expn coef in
-    let dexpn = unsigned exps shift in
-    let coef = coef lsl shift in
-    let min_expn = min_exponent exps in
-    let expn = ite (is_zero coef) min_expn (expn - dexpn) in
-    !! (expn,coef)
+    possible_shift expn coef >=> fun shift ->
+    unsigned exps shift >=> fun dexpn ->
+    coef lsl shift >=> fun coef ->
+    min_exponent exps >=> fun min_expn ->
+    ite (is_zero coef) min_expn (expn - dexpn) >=> fun expn ->
+    f expn coef
 
   let msbn x =
     let open B in
@@ -486,7 +484,7 @@ module Make(B : Theory.Basic) = struct
     one sigs lsl (of_int sigs Caml.(Bits.size sigs - 1)) >=> fun leading_one ->
     ite coef_overflow (coef lor leading_one) coef >=> fun coef ->
     round rm sign coef loss lost_bits @@ fun coef is_overflow ->
-    norm expn coef >>= fun (expn,coef) ->
+    norm expn coef @@ fun expn coef ->
     pack fsort sign expn coef
 
   let extend bitv ~addend  =
@@ -564,7 +562,7 @@ module Make(B : Theory.Basic) = struct
     ite msbc (coef lsr one sigs') coef >=> fun coef ->
     unsigned sigs coef >=> fun coef ->
     ite up (succ coef) coef >=> fun coef ->
-    norm expn coef >>= fun (expn,coef) ->
+    norm expn coef @@ fun expn coef ->
     pack fsort sign expn coef
 
   let fsum_special fsort is_sub x y =
@@ -610,7 +608,8 @@ module Make(B : Theory.Basic) = struct
     f coef clz
 
   (* TODO: handle rounding overflow *)
-
+  (* TODO: finish with comments *)
+  (* TODO: refactor it (probably cover with more tests before) *)
   (* Multiplication.
      The result of (Sx,Ex,Cx) * (Sy,Ey,Cy) is (Sx xor Sy, Ex + Ey - bias, Cx * Cy),
      where S,E,C - sign, exponent and coefficent.
@@ -654,7 +653,7 @@ module Make(B : Theory.Basic) = struct
 
     round rm sign coef loss prec @@ fun coef rnd_overflow ->
     low (exps fsort) expn >=> fun expn ->
-    norm expn coef >>= fun (expn,coef) ->
+    norm expn coef @@ fun expn coef ->
 
     match_ [
        is_underflow --> fzero fsort;
@@ -743,7 +742,7 @@ module Make(B : Theory.Basic) = struct
     and_ (xexpn > yexpn) (expn > dexpn + bias) >=> fun is_overflow ->
     expn + dexpn + bias  >=> fun expn ->
     ite is_overflow (inf fsort sign)
-      (norm expn coef >>= fun (expn,coef) ->
+      (norm expn coef @@ fun expn coef ->
        pack fsort sign expn coef)
 
   let fdiv_special fsort x y =
@@ -779,16 +778,41 @@ module Make(B : Theory.Basic) = struct
       else run x' ( n + 1) in
     run init 0
 
+  let test_pack fsort sign expn coef =
+    let open IEEE754 in
+    let open B in
+    let bits = Sort.bits fsort in
+    let _sign = ite sign (B.one bits) (B.zero bits) in
+    B.unsigned bits coef
+
   let gen_cast_float fsort sign bitv =
     let open IEEE754 in
     let open B in
+    sort bitv >>= fun inps ->
     let {p;bias} = Sort.spec fsort in
     let exps = exps fsort in
     let sigs = Bits.define p in
-    let expn = of_int exps Caml.(bias + p - 1) in
-    let coef = unsigned sigs bitv in
-    norm expn coef >>= fun (expn,coef) ->
-    pack fsort sign expn coef
+    of_int exps Caml.(bias + p - 1) >=> fun expn ->
+    of_int sigs p >=> fun prec ->
+    bitv >=> fun bitv ->
+    clz bitv >=> fun clz ->
+    unsigned sigs clz >=> fun clz ->
+    of_int sigs (Bits.size inps) - clz >=> fun msbn ->
+    ite (msbn > prec)
+      (msbn - prec >=> fun de ->
+       msbn - one sigs >=> fun hi ->
+       hi - prec + one sigs >=> fun lo ->
+       extract sigs hi lo bitv >=> fun coef ->
+       extract sigs (pred lo) (zero sigs) bitv >=> fun loss ->
+       round rne sign coef loss lo @@ fun coef rnd_overflow ->
+       ite rnd_overflow (not (ones sigs lsr one sigs)) coef >=> fun coef ->
+       ite rnd_overflow (succ expn) expn >=> fun expn ->
+       expn + unsigned exps de >=> fun expn ->
+       norm expn coef @@ fun expn coef ->
+       pack fsort sign expn coef)
+    (unsigned sigs bitv >=> fun coef ->
+     norm expn coef @@ fun expn coef ->
+     pack fsort sign expn coef)
 
   let cast_float fsort bitv = gen_cast_float fsort B.b0 bitv
 
