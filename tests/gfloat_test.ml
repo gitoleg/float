@@ -179,14 +179,6 @@ let make_float s e c =
   let w = Word.(concat (concat s e) c) in
   Word.signed w |> Word.to_int64_exn |> Int64.float_of_bits
 
-(* let bits64 : bits64 bitv sort = Bits.define 64
- *
- * let a = Var.create bits64 "A"
- * let b = Var.create bits64 "B"
- *
- * let z = G.fadd fsort G.rne (GE.BIL.var a) (GE.BIL.var b)
- * let _ = eval z *)
-
 let neg x = ~-. x
 let nan = Float.nan
 let inf = Float.infinity
@@ -212,10 +204,78 @@ let small_test () =
 
 let () = small_test ()
 
+let gfloat_of_int x =
+  let bits = Word.of_int ~width:53 x in
+  knowledge_of_word sigs bits
+
+let of_uint x ctxt =
+  let ops = sprintf "cast to float %d\n" x in
+  let real = float x in
+  let bitv = gfloat_of_int x in
+  let ours = G.cast_float fsort bitv |> to_float in
+  match ours with
+  | None -> assert_bool (sprintf "result is none %s" ops) false
+  | Some ours ->
+     assert_bool ops (bit_equal ops real ours)
+
+let of_sint x ctxt =
+  let ops = sprintf "cast to float signed %d\n" x in
+  let real = float x in
+  let bits = Word.of_int ~width:53 x in
+  let bitv = knowledge_of_word sigs bits in
+  let ours = G.cast_float_signed fsort bitv |> to_float in
+  match ours with
+  | None -> assert_bool (sprintf "result is none %s" ops) false
+  | Some ours ->
+     assert_bool ops (bit_equal ops real ours)
+
+let to_int x ctxt =
+  let ops = sprintf "cast to int %f\n" x in
+  let real = Int64.of_int (int_of_float x) in
+  let check res =
+    match res with
+    | None -> assert_bool (sprintf "result is none %s" ops) false
+    | Some res when Int64.(real = res) -> ()
+    | Some res ->
+      assert_bool (sprintf "%s failed: got %Ld" ops res) false in
+  let ours = of_float x |> G.cast_int fsort bitv in
+  match eval ours with
+  | None -> check None
+  | Some w ->
+     let w = Word.to_int64_exn (Word.signed w) in
+     check (Some w)
 
 let suite () =
 
   "Gfloat" >::: [
+
+      (* of uint *)
+      "of uint 42" >:: of_uint 42;
+      "of uint 0"  >:: of_uint 0;
+      "of uint 1"  >:: of_uint 1;
+      "of uint 2"  >:: of_uint 2;
+      "of uint 10" >:: of_uint 10;
+      "of uint 13213" >:: of_uint 13213;
+      "of uint 45676" >:: of_uint 45667;
+      "of uint 98236723" >:: of_uint 98236723;
+
+      (* of sint *)
+      "of sint -42" >:: of_sint (-42);
+      "of sint 0"  >:: of_sint 0;
+      "of sint -1"  >:: of_sint 1;
+      "of sint -2"  >:: of_sint (-2);
+      "of sint -10" >:: of_sint (-10);
+      "of sint -13213" >:: of_sint (-13213);
+      "of sint -45676" >:: of_sint (-45667);
+      "of sint -98236723" >:: of_sint (-98236723);
+
+      (* to int *)
+      "to int 42.42" >:: to_int 42.42;
+      "to int 0.42" >:: to_int 0.42;
+      "to int 0.99999999999" >:: to_int 0.99999999999;
+      "to int 13123120.98882344542" >:: to_int 13123120.98882344542;
+      "to int -42.42" >:: to_int (-42.42);
+      "to int -13123120.98882344542" >:: to_int (-13123120.98882344542);
 
       (* add *)
       "0.0 + 0.5"     >:: 0.0 + 0.5;
@@ -285,6 +345,7 @@ let suite () =
       "1.0 * 0.5"    >:: 1.0 * 0.5;
       "1.0 * -0.5"   >:: 1.0 * (neg 0.5);
       "- 1.0 * -0.5" >:: (neg 1.0) * (neg 0.5);
+      "123734.86124324198 * 23967986786.4834517" >:: 123734.86124324198 * 23967986786.4834517;
       "nan  * nan"    >:: nan  * nan;
       "inf  * inf"    >:: inf  * inf;
       "-inf * -inf"   >:: ninf * ninf;
@@ -294,15 +355,20 @@ let suite () =
       "inf  * nan"    >:: inf  * nan;
       "-inf * inf"    >:: ninf * inf;
       "inf  * -inf"   >:: inf  * ninf;
-      "0.0 * small"  >:: 0.0 * smallest_nonzero;
+      "0.0 * big"     >:: 0.0 * biggest_normal;
+      "0.0 * small"   >:: 0.0 * biggest_subnormal;
+      "0.0 * small'"  >:: 0.0 * smallest_nonzero;
       "2.0 * small"  >:: 2.0 * smallest_nonzero;
+      "1123131.45355 * small"  >:: 1123131.45355 * smallest_nonzero;
       "small * small" >:: smallest_nonzero * some_small;
-      "smalles_norm * small"    >:: smallest_normal * smallest_nonzero;
-      "biggest_sub * small"     >:: biggest_subnormal * smallest_nonzero;
-      "biggest_normal * small"  >:: biggest_normal * smallest_nonzero;
-      "biggest_normal * 2.0"    >:: biggest_normal * 2.0;
-      "biggest_normal * biggest subnormal"  >:: biggest_normal * biggest_subnormal;
-
+      "smallest normal * small"    >:: smallest_normal * smallest_nonzero;
+      "biggest subnormal * small"     >:: biggest_subnormal * smallest_nonzero;
+      "biggest normal * small"  >:: biggest_normal * smallest_nonzero;
+      "biggest normal * 2.0"    >:: biggest_normal * 2.0;
+      "biggest normal * biggest subnormal"  >:: biggest_normal * biggest_subnormal;
+      "biggest subnormal * small" >:: biggest_subnormal * smallest_nonzero;
+      "biggest subnormal * biggest subnormal" >:: biggest_subnormal *  biggest_subnormal;
+      "biggest normal * biggest normal" >:: biggest_normal *  biggest_normal;
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -311,7 +377,7 @@ let suite () =
       "324.32423 / 1.2" >:: 324.32423 / 1.2;
       "2.4 / 3.123131"  >:: 2.4 / 3.123131;
       "0.1313134 / 0.578465631" >:: 0.1313134 / 0.578465631;
-      "9991132.2131363434 / 2435.05656549151" >:: 9991132.2131363434 / 2435.05656549151;
+      "9991132.2131363434 / 2435.05656549153" >:: 9991132.2131363434 / 2435.05656549153;
       "nan  / nan"    >:: nan  / nan;
       "inf  / inf"    >:: inf  / inf;
       "-inf / -inf"   >:: ninf / ninf;
@@ -358,9 +424,8 @@ let deconstruct x =
   printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
     x (wi expn) (wi expn') (wi frac)
 
-(* let () = deconstruct 2.0 *)
 (* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
-
+(* let () = deconstruct 42.42 *)
 (* let () = deconstruct nan
  * let () = deconstruct (Float.neg_infinity *. Float.neg_infinity) *)
 

@@ -432,8 +432,8 @@ module Make(B : Theory.Basic) = struct
     clz coef >=> fun clz ->
     expn - min_exponent exps >=> fun diff ->
     signed sigs diff >=> fun diff ->
-    ite (clz <$ diff) clz diff >=> fun diff ->
-    ite (diff >$ zero sigs) diff (zero sigs)
+    ite (clz < diff) clz diff >=> fun diff ->
+    ite (diff > zero sigs) diff (zero sigs)
 
   let norm expn coef =
     let open B in
@@ -609,14 +609,14 @@ module Make(B : Theory.Basic) = struct
     coef lsl clz >=> fun coef ->
     f coef clz
 
-  (* todo : delete it *)
-  let test_pack fsort sign expn coef =
-    let bits = IEEE754.Sort.bits fsort in
-    let exps = IEEE754.Sort.exps fsort in
-    let _sign = B.(ite sign (one exps) (zero exps)) in
-    B.unsigned bits _sign
-
   (* TODO: handle rounding overflow *)
+
+  (* Multiplication.
+     The result of (Sx,Ex,Cx) * (Sy,Ey,Cy) is (Sx xor Sy, Ex + Ey - bias, Cx * Cy),
+     where S,E,C - sign, exponent and coefficent.
+     Also, say we have 53-bit precision: C = c52 . c51 . c50 ... c0.
+     The result is C = c105 . c104 ... c0, where result is in first 53
+     bits.  *)
   let fmul_finite fsort rm x y =
     let open B in
     let double e c f =
@@ -660,14 +660,6 @@ module Make(B : Theory.Basic) = struct
        is_underflow --> fzero fsort;
        is_overflow  --> inf fsort sign;
       ] ~default:(pack fsort sign expn coef)
-    (* pack fsort sign expn coef *)
-
-
-  let normalize_coef coef f =
-    let open B in
-    clz coef >=> fun clz ->
-    coef lsl clz >=> fun coef ->
-    f coef clz
 
 
   let fmul_special fsort x y =
@@ -698,8 +690,8 @@ module Make(B : Theory.Basic) = struct
   (* pre: nominator > denominator
      the msb of result can be 1 only (and only) in rare
      case of applying rounding to 01111..11. And we need to
-     to check msb manually, since rounding itself
-     will no help us.  *)
+     to check msb manually, since round function itself
+     will not help us.  *)
   let long_division prec rm sign nomin denom =
     let open B in
     sort nomin >>= fun sort ->
@@ -786,5 +778,37 @@ module Make(B : Theory.Basic) = struct
       if n > max then x0
       else run x' ( n + 1) in
     run init 0
+
+  let gen_cast_float fsort sign bitv =
+    let open IEEE754 in
+    let open B in
+    let {p;bias} = Sort.spec fsort in
+    let exps = exps fsort in
+    let sigs = Bits.define p in
+    let expn = of_int exps Caml.(bias + p - 1) in
+    let coef = unsigned sigs bitv in
+    norm expn coef >>= fun (expn,coef) ->
+    pack fsort sign expn coef
+
+  let cast_float fsort bitv = gen_cast_float fsort B.b0 bitv
+
+  let cast_float_signed fsort bitv =
+    let open B in
+    let sign = msb bitv in
+    let bitv = ite sign (neg bitv) bitv in
+    gen_cast_float fsort sign bitv
+
+  let cast_int fsort outs bitv =
+    let open B in
+    let open IEEE754 in
+    let {p;bias} = Sort.spec fsort in
+    let exps = exps fsort in
+    let sigs = Bits.define p in
+    unpack fsort bitv @@ fun sign expn coef ->
+    expn - of_int exps bias + one exps >=> fun bits ->
+    of_int sigs p - unsigned sigs bits >=> fun bits ->
+    coef lsr unsigned sigs bits >=> fun coef ->
+    unsigned outs coef >=> fun coef ->
+    ite sign (neg coef) coef
 
 end
