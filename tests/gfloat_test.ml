@@ -169,6 +169,17 @@ let binop op x y ctxt =
      let op = string_of_op op x y in
      assert_bool op (bit_equal op real ours)
 
+let sqrt x ctxt =
+  let fail info =
+    assert_bool (sprintf "failed sqrt %g: %s" x info) false in
+  let real = Float.sqrt x in
+  let y = of_float x in
+  let z = G.fsqrt fsort G.rne y in
+  match to_float z with
+  | None -> fail "result is none"
+  | Some ours ->
+     assert_bool "sqrt" (bit_equal "sqrt" real ours)
+
 let ( + ) = binop `Add
 let ( - ) = binop `Sub
 let ( * ) = binop `Mul
@@ -292,6 +303,7 @@ let make_random ~times =
         binop op x y ctxt in
        (sprintf "random%d" i) >:: f)
 
+let of_int64 = Int64.float_of_bits
 
 let suite () =
 
@@ -416,6 +428,7 @@ let suite () =
       "biggest subnormal * small" >:: biggest_subnormal * smallest_nonzero;
       "biggest subnormal * biggest subnormal" >:: biggest_subnormal *  biggest_subnormal;
       "biggest normal * biggest normal" >:: biggest_normal *  biggest_normal;
+      "test with underflow" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L);
 
       (* div *)
       "2.0 / 0.5"   >:: 2.0 / 0.5;
@@ -443,19 +456,20 @@ let suite () =
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
       "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
-  ] @ make_random ~times:20000
+  ] @ make_random ~times:50000
 
 (* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
 
-let of_int64 = Int64.float_of_bits
 
-let a () = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 974381688320862858L))
-let a () = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits (-5590604654947855237L)))
+
+let a() = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 974381688320862858L))
+let a() = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits (-5590604654947855237L)))
 
 let asuite () =
   "test" >::: [
       "mytest1" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L);
-      "mytest2" >:: 2.0 * smallest_nonzero;
+      (* "mytest2" >:: 2.0 * smallest_nonzero; *)
+   (* "mytest" >:: sqrt 8.0; *)
     ]
 
 let result x =

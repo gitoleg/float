@@ -614,7 +614,7 @@ module Make(B : Theory.Basic) = struct
     let open B in
     let bits = Sort.bits fsort in
     let _sign = ite sign (one bits) (zero bits) in
-    unsigned bits _sign
+    unsigned bits coef
 
 
   (* TODO: handle rounding overflow *)
@@ -650,13 +650,13 @@ module Make(B : Theory.Basic) = struct
     ite coef_overflowed (succ expn) expn >=> fun expn ->
     of_int exps' (bias fsort) >=> fun bias ->
     bias + unsigned exps' dnorm >=> fun dexpn ->
-    ite (dexpn >$ expn) (dexpn - expn + min_exponent exps') (zero exps') >=> fun underflow ->
+    ite (dexpn >=$ expn) (dexpn - expn + min_exponent exps') (zero exps') >=> fun underflow ->
     underflow > of_int exps' precision >=> fun is_underflow ->
     expn - dexpn + underflow >=> fun expn ->
     expn > unsigned exps' maxe >=> fun is_overflow ->
-
     ite coef_overflowed (one sigs') (zero sigs') >=> fun from_overflow ->
     coef lsr (from_overflow + unsigned sigs' underflow) >=> fun coef ->
+
     coef lsl one sigs' >=> fun coef ->
     low (sigs fsort) coef >=> fun loss ->
     high (sigs fsort) coef >=> fun coef ->
@@ -787,7 +787,7 @@ module Make(B : Theory.Basic) = struct
       (fdiv_finite fsort rm x y)
       (fdiv_special fsort x y)
 
-(* newton-Raphson algorithm. Need a good choice of a starting seed  *)
+(* Newton-Raphson algorithm. Need a good choice of a starting seed  *)
   let fsqrt fsort rm x =
     let two = fadd_finite fsort rm (fone fsort) (fone fsort) in
     let init = fdiv_finite fsort rm x two in
