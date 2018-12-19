@@ -208,7 +208,7 @@ let a () = small_test ()
 let gfloat_of_int x =
   let bits = Word.of_int ~width:64 x in
   let bitv = knowledge_of_word bitv bits in
-  G.cast_float fsort bitv
+  G.cast_float fsort G.rne bitv
 
 let of_uint x ctxt =
   let ops = sprintf "cast to float %d\n" x in
@@ -225,7 +225,7 @@ let of_sint x ctxt =
   let real = float x in
   let bits = Word.of_int ~width:53 x in
   let bitv = knowledge_of_word sigs bits in
-  let ours = G.cast_float_signed fsort bitv |> to_float in
+  let ours = G.cast_float_signed fsort G.rne bitv |> to_float in
   match ours with
   | None -> assert_bool (sprintf "result is none %s" ops) false
   | Some ours ->

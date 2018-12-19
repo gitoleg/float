@@ -797,7 +797,7 @@ module Make(B : Theory.Basic) = struct
       else run x' ( n + 1) in
     run init 0
 
-  let gen_cast_float fsort sign bitv =
+  let gen_cast_float fsort rmode sign bitv =
     let open IEEE754 in
     let open B in
     sort bitv >>= fun inps ->
@@ -826,13 +826,13 @@ module Make(B : Theory.Basic) = struct
      norm expn coef @@ fun expn coef ->
      pack fsort sign expn coef)
 
-  let cast_float fsort bitv = gen_cast_float fsort B.b0 bitv
+  let cast_float fsort rmode bitv = gen_cast_float fsort rmode B.b0 bitv
 
-  let cast_float_signed fsort bitv =
+  let cast_float_signed fsort rmode bitv =
     let open B in
     let sign = msb bitv in
     let bitv = ite sign (neg bitv) bitv in
-    gen_cast_float fsort sign bitv
+    gen_cast_float fsort rmode sign bitv
 
   let cast_int fsort outs bitv =
     let open B in
