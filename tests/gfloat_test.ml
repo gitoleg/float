@@ -465,11 +465,11 @@ let suite () =
 let a() = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 974381688320862858L))
 let a() = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits (-5590604654947855237L)))
 
-let asuite () =
+let suite () =
   "test" >::: [
-      "mytest1" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L);
+      (* "mytest1" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L); *)
       (* "mytest2" >:: 2.0 * smallest_nonzero; *)
-   (* "mytest" >:: sqrt 8.0; *)
+   "mytest" >:: sqrt 8.0;
     ]
 
 let result x =

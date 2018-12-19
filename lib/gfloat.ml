@@ -789,9 +789,9 @@ module Make(B : Theory.Basic) = struct
 
 (* Newton-Raphson algorithm. Need a good choice of a starting seed  *)
   let fsqrt fsort rm x =
-    let two = fadd_finite fsort rm (fone fsort) (fone fsort) in
-    let init = fdiv_finite fsort rm x two in
     let max = precision fsort in
+    fadd_finite fsort rm (fone fsort) (fone fsort) >=> fun two ->
+    fdiv_finite fsort rm x two >=> fun init ->
     let rec run x0 n =
       fdiv fsort rm x x0 >=> fun a1 ->
       fadd fsort rm x0 a1 >=> fun a2 ->
