@@ -266,8 +266,8 @@ let random_int ~from ~to_ =
   x + from
 
 let random_float () =
-  let expn () = random_int ~from:1020 ~to_:1040 in
-  let frac () = Random.int 4503599627000000 in
+  let expn () = random_int ~from:0 ~to_:2046 in
+  let frac () = Random.int 4503599627370495 in
   let sign () = Random.int 2 in
   let make () =
     let expn = expn () in
@@ -277,24 +277,11 @@ let random_float () =
     let x = Random.int 9 in
     let y = Int64.of_int x in
     Random.float (Int64.float_of_bits y) in
-  match Random.int 2 with
-  | 0 -> small ()
+  match Random.int 10 with
+  | 3 | 6 -> small ()
   | _ -> make ()
 
 let make_random ~times =
-  let binop op x y ctxt =
-    if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
-    else
-      binop op x y ctxt in
-  (* let sqrt (x, x') ctxt =
-   *   if x < 0.0 then ()
-   *   else
-   *     let op = `Sqrt in
-   *     let isok = is_ok_unop2 op x in
-   *     let op_str = sprintf "%s, %s"
-   *         (string_of_unop op x) (string_of_random x') in
-   *     let error = sprintf "%s failed for radix 2" op_str in
-   *     assert_bool error isok in *)
   let random = Random.int in
   let random_elt xs = List.nth_exn xs @@ random (List.length xs) in
   List.init times ~f:(fun i ->
@@ -302,11 +289,8 @@ let make_random ~times =
         let op = random_elt [`Add;`Sub; `Mul; `Div] in
         let x = random_float () in
         let y = random_float () in
-        let () = binop op x y ctxt in
-        () in
-        (* sqrt x ctxt in *)
-      (sprintf "random%d" i) >:: f)
-
+        binop op x y ctxt in
+       (sprintf "random%d" i) >:: f)
 
 
 let suite () =
@@ -459,26 +443,19 @@ let suite () =
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
       "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
-  ] @ make_random ~times:10000
+  ] @ make_random ~times:20000
 
 (* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
 
 let of_int64 = Int64.float_of_bits
 
-let a () = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 4641860775732488997L))
-let a () = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits 4654901688696034808L))
+let a () = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 974381688320862858L))
+let a () = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits (-5590604654947855237L)))
 
 let asuite () =
   "test" >::: [
-      (* "mytest1" >:: of_int64 4653933137958313667L - of_int64 4660200489909900540L;
-       * "mytest2" >:: of_int64 4611768689445173477L - of_int64 4598045197131119927L; *)
-      "mytest3" >:: of_int64 4641860775732488997L + of_int64 4654901688696034808L;
-
-      (* "of uint 42" >:: of_uint 42; *)
-      (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
-      (* "2.0 * small"  >:: 2.0 * smallest_nonzero;
-       * "biggest_normal * biggest_subnorm"  >:: biggest_normal * biggest_subnormal;
-       * "biggest_normal * small"  >:: biggest_normal * smallest_nonzero; *)
+      "mytest1" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L);
+      "mytest2" >:: 2.0 * smallest_nonzero;
     ]
 
 let result x =

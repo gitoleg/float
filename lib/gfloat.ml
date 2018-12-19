@@ -320,6 +320,11 @@ module Make(B : Theory.Basic) = struct
 
   let is_special fsort x = unpack fsort x @@ fun _ expn _ -> B.is_all_ones expn
   let is_finite fsort x = B.inv (is_special fsort x)
+  let is_finite_nonzero fsort x =
+    let open B in
+    unpack_raw fsort x @@ fun _ expn coef ->
+    inv (is_all_ones expn) >=> fun ok_expn ->
+    ok_expn && (non_zero expn || non_zero coef)
 
   let is_norml fsort x = unpack_raw fsort x @@ fun _ e _ -> B.non_zero e
   let is_subnormal fsort x =
@@ -603,6 +608,15 @@ module Make(B : Theory.Basic) = struct
     coef lsl clz >=> fun coef ->
     f coef clz
 
+
+  let test_pack fsort sign expn coef =
+    let open IEEE754 in
+    let open B in
+    let bits = Sort.bits fsort in
+    let _sign = ite sign (one bits) (zero bits) in
+    unsigned bits _sign
+
+
   (* TODO: handle rounding overflow *)
   (* TODO: finish with comments *)
   (* TODO: refactor it (probably cover with more tests before) *)
@@ -636,7 +650,7 @@ module Make(B : Theory.Basic) = struct
     ite coef_overflowed (succ expn) expn >=> fun expn ->
     of_int exps' (bias fsort) >=> fun bias ->
     bias + unsigned exps' dnorm >=> fun dexpn ->
-    ite (dexpn >$ expn) (dexpn - expn + one exps') (zero exps') >=> fun underflow ->
+    ite (dexpn >$ expn) (dexpn - expn + min_exponent exps') (zero exps') >=> fun underflow ->
     underflow > of_int exps' precision >=> fun is_underflow ->
     expn - dexpn + underflow >=> fun expn ->
     expn > unsigned exps' maxe >=> fun is_overflow ->
@@ -650,12 +664,10 @@ module Make(B : Theory.Basic) = struct
     round rm sign coef loss prec @@ fun coef rnd_overflow ->
     low (exps fsort) expn >=> fun expn ->
     norm expn coef @@ fun expn coef ->
-
     match_ [
        is_underflow --> fzero fsort sign;
        is_overflow  --> inf fsort sign;
       ] ~default:(pack fsort sign expn coef)
-
 
   let fmul_special fsort x y =
     let open B in
@@ -750,7 +762,6 @@ module Make(B : Theory.Basic) = struct
         norm expn coef @@ fun expn coef ->
         pack fsort sign expn coef)
 
-
   let fdiv_special fsort x y =
     let open B in
     with_special fsort x @@ fun ~is_inf:xinf ~is_snan:xsnan ~is_qnan:xqnan ->
@@ -758,8 +769,13 @@ module Make(B : Theory.Basic) = struct
     fsign x >=> fun xsign ->
     fsign y >=> fun ysign ->
     (xinf && yinf) >=> fun is_inf ->
+    inv (xinf || xsnan || xsnan) >=> fun is_finx ->
+    inv (yinf || ysnan || ysnan) >=> fun is_finy ->
+    xor xsign ysign >=> fun sign ->
     match_ [
       (is_zero x && is_zero y) --> qnan fsort;
+      (is_zero x && is_finy) --> fzero fsort sign;
+      (is_zero y && is_finx) --> inf fsort sign;
       (xinf && yinf) --> qnan fsort;
       is_inf --> with_sign (xor xsign ysign) x;
       (xsnan || xqnan) --> transform_to_quite fsort x
@@ -767,11 +783,11 @@ module Make(B : Theory.Basic) = struct
 
   let fdiv fsort rm x y =
     let open B in
-    ite (is_finite fsort x && is_finite fsort y)
+    ite (is_finite_nonzero fsort x && is_finite_nonzero fsort y)
       (fdiv_finite fsort rm x y)
       (fdiv_special fsort x y)
 
-(* Newton-Raphson algorithm. Need a good choice of a starting seed  *)
+(* newton-Raphson algorithm. Need a good choice of a starting seed  *)
   let fsqrt fsort rm x =
     let two = fadd_finite fsort rm (fone fsort) (fone fsort) in
     let init = fdiv_finite fsort rm x two in
