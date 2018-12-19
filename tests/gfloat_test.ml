@@ -136,12 +136,14 @@ let caml_result x y = function
   | `Div -> x /. y
 
 let string_of_op op x y =
-  sprintf "%s %g %g" (Sexp.to_string (sexp_of_binop op)) x y
+  let x' = Int64.bits_of_float x in
+  let y' = Int64.bits_of_float y in
+  sprintf "%s %g %g(%Ld %Ld)"
+    (Sexp.to_string (sexp_of_binop op)) x y x' y'
 
 let fail info op x y =
   let op = string_of_op op x y in
   assert_bool (sprintf "failed %s(%s)" op info) false
-
 
 let bit_equal op x y =
   let r = Int64.(bits_of_float x = bits_of_float y) in
@@ -256,6 +258,55 @@ let small_test () =
 
 let a () = small_test ()
 
+let random_int ~from ~to_ =
+  let open Caml in
+  let max = to_ - from in
+  let x = Random.int max in
+  x + from
+
+let random_float () =
+  let expn () = random_int ~from:1020 ~to_:1040 in
+  let frac () = Random.int 4503599627000000 in
+  let sign () = Random.int 2 in
+  let make () =
+    let expn = expn () in
+    let frac = frac () in
+    make_float (sign ()) expn frac in
+  let small () =
+    let x = Random.int 9 in
+    let y = Int64.of_int x in
+    Random.float (Int64.float_of_bits y) in
+  match Random.int 2 with
+  | 0 -> small ()
+  | _ -> make ()
+
+let make_random ~times =
+  let binop op x y ctxt =
+    if op = `Div && (y = 0.0 || y = ~-.0.0) then ()
+    else
+      binop op x y ctxt in
+  (* let sqrt (x, x') ctxt =
+   *   if x < 0.0 then ()
+   *   else
+   *     let op = `Sqrt in
+   *     let isok = is_ok_unop2 op x in
+   *     let op_str = sprintf "%s, %s"
+   *         (string_of_unop op x) (string_of_random x') in
+   *     let error = sprintf "%s failed for radix 2" op_str in
+   *     assert_bool error isok in *)
+  let random = Random.int in
+  let random_elt xs = List.nth_exn xs @@ random (List.length xs) in
+  List.init times ~f:(fun i ->
+      let f (ctxt : test_ctxt) =
+        let op = random_elt [`Add;`Sub; `Mul; `Div] in
+        let x = random_float () in
+        let y = random_float () in
+        let () = binop op x y ctxt in
+        () in
+        (* sqrt x ctxt in *)
+      (sprintf "random%d" i) >:: f)
+
+
 
 let suite () =
 
@@ -315,7 +366,6 @@ let suite () =
       "biggest_normal + small"  >:: biggest_normal + smallest_nonzero;
       "biggest_normal + biggest_subnorm"  >:: biggest_normal + biggest_subnormal;
 
-
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
       "4.28 - 2.2"    >:: 4.28 - 2.2;
@@ -348,7 +398,6 @@ let suite () =
       "biggest_normal - small"  >:: biggest_normal - smallest_nonzero;
       "biggest_normal - biggest_subnorm"  >:: biggest_normal - biggest_subnormal;
       "biggest_subnorm - biggest_normal"  >:: biggest_subnormal - biggest_normal;
-
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -409,13 +458,18 @@ let suite () =
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
       "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
-    ]
+  ] @ make_random ~times:1000
 
 (* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
 
-let asuite () =
+let of_int64 = Int64.float_of_bits
+
+let () = printf "x: %s\n" (string_of_bits64 (of_int64 (-4582639464564586690L)))
+let () = printf "y: %s\n" (string_of_bits64 (of_int64 4682241153476784742L))
+
+let suite () =
   "test" >::: [
-      "of uint 0xFFFF_FFFF_FFFF_FFF" >:: of_uint 0xFFFF_FFFF_FFFF_FFF;
+      "mytest" >:: of_int64 (-4582639464564586690L) - of_int64 4682241153476784742L;
       (* "of uint 42" >:: of_uint 42; *)
       (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
       (* "2.0 * small"  >:: 2.0 * smallest_nonzero;
