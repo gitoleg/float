@@ -464,12 +464,12 @@ let suite () =
 
 let of_int64 = Int64.float_of_bits
 
-let () = printf "x: %s\n" (string_of_bits64 (of_int64 (-4582639464564586690L)))
-let () = printf "y: %s\n" (string_of_bits64 (of_int64 4682241153476784742L))
+let () = printf "x: %s\n" (string_of_bits64 (of_int64 1L))
+let () = printf "y: %s\n" (string_of_bits64 (of_int64 (-4554114423350868820L)))
 
-let suite () =
+let asuite () =
   "test" >::: [
-      "mytest" >:: of_int64 (-4582639464564586690L) - of_int64 4682241153476784742L;
+      "mytest" >:: of_int64 1L / of_int64 (-4554114423350868820L);
       (* "of uint 42" >:: of_uint 42; *)
       (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
       (* "2.0 * small"  >:: 2.0 * smallest_nonzero;

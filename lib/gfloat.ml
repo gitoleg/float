@@ -225,13 +225,14 @@ module Make(B : Theory.Basic) = struct
     ite sign ((append s (one bit) (zero s')) lor bitv)
       ((append s (zero bit) (ones s')) land bitv)
 
-  let fzero sign fsort =
+  let fzero fsort sign =
     let open B in
-    zero (IEEE754.Sort.bits fsort) >=> fun bitv ->
+    let bits = IEEE754.Sort.bits fsort in
+    zero bits >=> fun bitv ->
     ite sign (
-        ones (sigs fsort) >=> fun ones ->
-        not (ones lsl one (sigs fsort)) >=> fun one ->
-        one land bitv)
+        ones bits >=> fun ones ->
+        not (ones lsr one bits) >=> fun one ->
+        one lor bitv)
       bitv
 
   let fone fsort =
@@ -466,7 +467,7 @@ module Make(B : Theory.Basic) = struct
     let open B in
     let bits = Sort.bits fsort in
     let _sign = ite sign (one bits) (zero bits) in
-    B.unsigned bits _sign
+    B.unsigned bits coef
 
   (* TODO: handle rounding overflow *)
   let fadd_finite fsort rm x y =
@@ -477,15 +478,15 @@ module Make(B : Theory.Basic) = struct
     sort xexpn >>= fun xes ->
     sort xcoef >>= fun xec ->
     ite (xexpn > yexpn) (xexpn - yexpn) (yexpn - xexpn) >=> fun lost_bits ->
+    match_ [
+        (xexpn = yexpn) --> zero sigs;
+        (xexpn > yexpn) --> extract_last ycoef lost_bits;
+      ] ~default:(extract_last xcoef lost_bits) >=> fun loss ->
     ite (xexpn > yexpn) xcoef (xcoef lsr lost_bits) >=> fun xcoef ->
     ite (yexpn > xexpn) ycoef (ycoef lsr lost_bits) >=> fun ycoef ->
     xcoef + ycoef >=> fun coef ->
     max xexpn yexpn >=> fun expn ->
     ite (coef >= xcoef) expn (succ expn) >=> fun expn ->
-    match_ [
-          (xexpn = yexpn) --> zero sigs;
-          (xexpn > yexpn) --> extract_last ycoef lost_bits;
-      ] ~default:(extract_last xcoef lost_bits) >=> fun loss ->
     guardbit_of_loss loss lost_bits >=> fun guard' ->
     roundbit_of_loss loss lost_bits >=> fun round' ->
     stickybit_of_loss loss lost_bits >=> fun sticky' ->
@@ -670,7 +671,7 @@ module Make(B : Theory.Basic) = struct
     norm expn coef @@ fun expn coef ->
 
     match_ [
-       is_underflow --> fzero sign fsort;
+       is_underflow --> fzero fsort sign;
        is_overflow  --> inf fsort sign;
       ] ~default:(pack fsort sign expn coef)
 
@@ -752,12 +753,16 @@ module Make(B : Theory.Basic) = struct
     unsigned sigs coef >=> fun coef ->
     of_int exps (bias fsort) >=> fun bias ->
     de + from_rnd - dexpn' >=> fun dexpn ->
+    xexpn < yexpn >=> fun is_underflow ->
     xexpn - yexpn >=> fun expn ->
-    and_ (xexpn > yexpn) (expn > dexpn + bias) >=> fun is_overflow ->
+    ((xexpn > yexpn) && (expn > dexpn + bias)) >=> fun is_overflow ->
     expn + dexpn + bias  >=> fun expn ->
-    ite is_overflow (inf fsort sign)
-      (norm expn coef @@ fun expn coef ->
-       pack fsort sign expn coef)
+    match_ [
+       is_underflow --> fzero fsort sign;
+       is_overflow  --> inf fsort sign;
+      ] ~default:(
+        norm expn coef @@ fun expn coef ->
+        pack fsort sign expn coef)
 
   let fdiv_special fsort x y =
     let open B in
@@ -791,13 +796,6 @@ module Make(B : Theory.Basic) = struct
       if n > max then x0
       else run x' ( n + 1) in
     run init 0
-
-  let test_pack fsort sign expn coef =
-    let open IEEE754 in
-    let open B in
-    let bits = Sort.bits fsort in
-    let _sign = ite sign (B.one bits) (B.zero bits) in
-    B.unsigned bits coef
 
   let gen_cast_float fsort sign bitv =
     let open IEEE754 in
