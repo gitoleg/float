@@ -61,6 +61,7 @@ let eval x =
      | None -> printf "Semantics.get: none!\n"; None
      | Some e ->
         (* printf "%s\n" (Exp.to_string e); *)
+        let _a = Type.infer_exn e in
         match Expi.eval e with
         | Bil.Imm w -> Some w
         | _ -> assert false
@@ -458,7 +459,7 @@ let suite () =
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
       "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
-  ] @ make_random ~times:1000
+  ] (* @ make_random ~times:1000 *)
 
 (* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
 
@@ -469,7 +470,7 @@ let () = printf "y: %s\n" (string_of_bits64 (of_int64 (-4554114423350868820L)))
 
 let asuite () =
   "test" >::: [
-      "mytest" >:: of_int64 1L / of_int64 (-4554114423350868820L);
+      "mytest" >:: 4.5 - 4.2;
       (* "of uint 42" >:: of_uint 42; *)
       (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
       (* "2.0 * small"  >:: 2.0 * smallest_nonzero;
