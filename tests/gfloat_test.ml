@@ -459,18 +459,21 @@ let suite () =
       "biggest_normal / small"  >:: biggest_normal / smallest_nonzero;
       "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
-  ] @ make_random ~times:1000
+  ] @ make_random ~times:10000
 
 (* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
 
 let of_int64 = Int64.float_of_bits
 
-(* let () = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits (-4602309690694630812L)))
- * let () = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits 4681512219439022135L)) *)
+let a () = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 4641860775732488997L))
+let a () = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits 4654901688696034808L))
 
 let asuite () =
   "test" >::: [
-      "mytest" >:: of_int64 3L / of_int64 (-4609016248130876259L);
+      (* "mytest1" >:: of_int64 4653933137958313667L - of_int64 4660200489909900540L;
+       * "mytest2" >:: of_int64 4611768689445173477L - of_int64 4598045197131119927L; *)
+      "mytest3" >:: of_int64 4641860775732488997L + of_int64 4654901688696034808L;
+
       (* "of uint 42" >:: of_uint 42; *)
       (* "1.0 * 0.5"    >:: 1.0 * 0.5; *)
       (* "2.0 * small"  >:: 2.0 * smallest_nonzero;

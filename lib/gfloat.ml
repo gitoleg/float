@@ -375,9 +375,9 @@ module Make(B : Theory.Basic) = struct
     let open B in
     sort lost_bits >>= fun sort ->
     of_int sort 3 >=> fun minbits ->
-    (lost_bits > minbits) >=> fun is_valid ->
-    ite is_valid (pred (pred (pred lost_bits))) (zero sort) >=> fun pos ->
-    ite is_valid (non_zero (extract_last loss pos)) b0
+    (lost_bits >= minbits) >=> fun is_valid ->
+    ite is_valid (pred (pred lost_bits)) (zero sort) >=> fun n ->
+    ite is_valid (non_zero (extract_last loss n)) b0
 
   (* the result of rounding must be checked because in the corner case
      when input is 111...1 it could return 000..0, that means that
@@ -467,7 +467,7 @@ module Make(B : Theory.Basic) = struct
     let open B in
     let bits = Sort.bits fsort in
     let _sign = ite sign (one bits) (zero bits) in
-    B.unsigned bits coef
+    B.unsigned bits _sign
 
   (* TODO: handle rounding overflow *)
   let fadd_finite fsort rm x y =
@@ -507,32 +507,12 @@ module Make(B : Theory.Basic) = struct
     let sort' = Bits.define (Bits.size sort + addend) in
     B.unsigned sort' bitv
 
-  let half_of_loss loss lost_bits =
+  let test_pack fsort sign expn coef =
+    let open IEEE754 in
     let open B in
-    sort loss >>= fun vsort ->
-    unsigned vsort lost_bits >=> fun lost_bits ->
-    ite (is_zero lost_bits) (zero vsort) (pred lost_bits) >=> fun n ->
-    one vsort lsl n
-
-  let invert_loss loss lost_bits =
-    let open B in
-    sort loss >>= fun sort ->
-    let half = half_of_loss loss lost_bits in
-    let inverted =
-      not (ones sort lsl lost_bits) >=> fun mask ->
-      mask land (not loss) in
-    match_ [
-        is_zero lost_bits --> zero sort;
-        is_zero loss --> loss;
-        (loss = half) --> loss;
-      ] ~default:inverted
-
-  let match_cmp x y ~on_eql ~on_gt ~on_lt =
-    let open B in
-    match_ [
-      (x =  y) --> on_eql;
-      (x >$ y) --> on_gt;
-      ] ~default:on_lt
+    let bits = Sort.bits fsort in
+    let _sign = ite sign (one bits) (zero bits) in
+    unsigned bits _sign
 
   (* TODO: handle rounding overflow
      TODO: refactoring needed *)
@@ -551,7 +531,6 @@ module Make(B : Theory.Basic) = struct
         (xexpn > yexpn) --> extract_last ycoef lost_bits;
         (xexpn < yexpn) --> extract_last xcoef lost_bits;
       ] ~default:(zero sigs') >=> fun loss ->
-    invert_loss loss lost_bits >=> fun loss ->
     or_ (xexpn < yexpn) (and_ (xexpn = yexpn) (xcoef < ycoef)) >=> fun swap ->
     ite swap (inv xsign) xsign >=> fun sign ->
     match_ [
@@ -571,11 +550,12 @@ module Make(B : Theory.Basic) = struct
     guardbit_of_loss loss lost_bits >=> fun guard' ->
     roundbit_of_loss loss lost_bits >=> fun round' ->
     stickybit_of_loss loss lost_bits >=> fun sticky' ->
+    ite (round' || sticky') (inv guard') guard' >=> fun guard' ->
     ite msbc (lsb coef) guard' >=> fun guard ->
-    ite msbc guard round' >=> fun round ->
-    ite msbc (round || sticky')  sticky' >=> fun sticky ->
-    is_round_up rm sign coef guard round sticky >=> fun up ->
+    ite msbc guard' round' >=> fun round ->
+    ite msbc (round' || sticky')  sticky' >=> fun sticky ->
     ite msbc (coef lsr one sigs') coef >=> fun coef ->
+    is_round_up rm sign coef guard round sticky >=> fun up ->
     unsigned sigs coef >=> fun coef ->
     ite up (succ coef) coef >=> fun coef ->
     norm expn coef @@ fun expn coef ->
@@ -727,13 +707,6 @@ module Make(B : Theory.Basic) = struct
         bind next_nomin (fun next_nomin ->
           loop Caml.(i - 1) (bit :: bits) next_nomin) in
     loop Caml.(prec - 1) [] nomin
-
-  let test_pack fsort sign expn coef =
-    let open IEEE754 in
-    let open B in
-    let bits = Sort.bits fsort in
-    let _sign = ite sign (one bits) (zero bits) in
-    unsigned bits coef
 
   let fdiv_finite fsort rm x y =
     let open B in
