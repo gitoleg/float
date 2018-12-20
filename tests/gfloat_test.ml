@@ -60,11 +60,11 @@ let eval x =
      match Semantics.get GE.exp s with
      | None -> printf "Semantics.get: none!\n"; None
      | Some e ->
-        (* printf "%s\n" (Exp.to_string e); *)
-        let _a = Type.infer_exn e in
-        match Expi.eval e with
-        | Bil.Imm w -> Some w
-        | _ -> assert false
+        printf "%s\n" (Exp.to_string e); None
+        (* let _a = Type.infer_exn e in
+         * match Expi.eval e with
+         * | Bil.Imm w -> Some w
+         * | _ -> assert false *)
 
 let enum_bits w =
   let bits = Word.(enum_bits w BigEndian) in

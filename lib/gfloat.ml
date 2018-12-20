@@ -32,7 +32,6 @@ type ('b, 'e) float = {
 
 let make_float sign expn coef = !! {sign; expn; coef}
 
-
 module Rounding = struct
 
   module Rounding_domain = struct
@@ -190,6 +189,7 @@ module Make(B : Theory.Basic) = struct
   let pack fsort x =
     let open B in
     let {IEEE754.p; t} = IEEE754.Sort.spec fsort in
+    x >>= fun x ->
     ite ((inv (msb x.coef)) && (is_one x.expn)) (pred x.expn) x.expn >=> fun expn ->
     if Caml.(p = t) then pack_raw fsort x.sign expn x.coef
     else
@@ -216,8 +216,7 @@ module Make(B : Theory.Basic) = struct
     exponent fsort x >=> fun expn ->
     finite_significand fsort expn x >=> fun coef ->
     B.(ite (is_zero expn) (succ expn) expn) >=> fun expn ->
-    make_float (fsign x) expn coef >>= fun x ->
-    f x
+    make_float (fsign x) expn coef >>= fun x -> f x
 
   let unpack_raw fsort x f =
     exponent fsort x >=> fun expn ->
@@ -253,8 +252,8 @@ module Make(B : Theory.Basic) = struct
     let open B in
     let open IEEE754 in
     let exps = Sort.exps fsort in
-    make_float sign (B.ones exps) (B.zero (sigs fsort)) >>= fun x ->
-    pack fsort x
+    pack fsort @@
+    make_float sign (B.ones exps) (B.zero (sigs fsort))
 
   let is_inf fsort x =
     unpack fsort x @@ fun x ->
@@ -576,8 +575,8 @@ module Make(B : Theory.Basic) = struct
     (fadd_raw fsort rm x y f)
 
   let add_or_sub_finite is_sub fsort rm x y =
-    unpack fsort x >>= fun x ->
-    unpack fsort y >>= fun y ->
+    unpack fsort x @@ fun x ->
+    unpack fsort y @@ fun y ->
     add_or_sub_raw fsort is_sub rm x y @@ fun r -> pack fsort r
 
   let fsum_special fsort is_sub x y =
@@ -661,14 +660,14 @@ module Make(B : Theory.Basic) = struct
     coef lsl one sigs' >=> fun coef ->
     low sigs coef >=> fun loss ->
     high sigs coef >=> fun coef ->
-
     round rm sign coef loss prec @@ fun coef rnd_overflow ->
     low exps expn >=> fun expn ->
     norm expn coef @@ fun expn coef ->
-    match_ [
-       is_underflow --> f (make_float sign (zero exps) (zero sigs));
-       is_overflow  --> f (make_float sign (ones exps) (zero sigs));
-      ] ~default:(f (make_float sign expn coef))
+
+    ite is_underflow (zero exps) expn >=> fun expn ->
+    ite is_overflow (ones exps) expn >=> fun expn ->
+    ite (is_overflow || is_underflow) (zero sigs) coef >=> fun coef ->
+    f (make_float sign expn coef)
 
   let fmul_finite fsort rm x y =
     unpack fsort x @@ fun x ->
@@ -758,11 +757,12 @@ module Make(B : Theory.Basic) = struct
     ite underflowed (coef lsr shift) coef >=> fun coef ->
     round rm sign coef loss shift @@ fun coef _ ->
     ite underflowed (min_exponent exps) expn >=> fun expn ->
-    match_ [
-        is_overflow  --> f (make_float sign (ones exps) (zero sigs));
-        is_underflow --> f (make_float sign (zero exps) (zero sigs));
-      ] ~default:(norm expn coef @@ fun expn coef -> f (make_float sign expn coef))
 
+    ite is_underflow (zero exps) expn >=> fun expn ->
+    ite is_overflow  (ones exps) expn >=> fun expn ->
+    ite (is_overflow || is_underflow) (zero sigs) coef >=> fun coef ->
+    norm expn coef @@ fun expn coef ->
+    make_float sign expn coef >>= fun x -> f x
 
   let fdiv_special fsort x y =
     let open B in
@@ -786,7 +786,7 @@ module Make(B : Theory.Basic) = struct
   let fdiv_finite fsort rm x y =
     unpack fsort x @@ fun x ->
     unpack fsort y @@ fun y ->
-    fdiv_raw fsort rm x y @@ fun r -> pack fsort r
+    fdiv_raw fsort rm x y @@ fun r -> pack fsort !!r
 
   let fdiv fsort rm x y =
     let open B in
@@ -796,11 +796,12 @@ module Make(B : Theory.Basic) = struct
 
 (* Newton-Raphson algorithm. Need a good choice of a starting seed  *)
   let fsqrt_raw fsort rm x f =
-    let max = precision fsort in
+    let max =  2 in (* precision fsort in *)
     let run init two f =
       let rec loop x0 n =
         fdiv_raw fsort rm x x0 @@ fun a1 ->
         fadd_raw fsort rm x0 a1 @@ fun a2 ->
+        a2 >>= fun a2 ->
         fdiv_raw fsort rm a2 two @@ fun x' ->
         if n > max then f x0
         else loop x' ( n + 1) in
@@ -808,6 +809,7 @@ module Make(B : Theory.Basic) = struct
     let uno = fone fsort in
     unpack fsort uno @@ fun uno ->
       fadd_raw fsort rm uno uno @@ fun two ->
+      two >>= fun two ->
       fdiv_raw fsort rm x two @@ fun init ->
       run init two f
 
@@ -815,7 +817,7 @@ module Make(B : Theory.Basic) = struct
   let fsqrt fsort rm x =
     unpack fsort x @@ fun x ->
     fsqrt_raw fsort rm x @@ fun x ->
-    pack fsort x
+    pack fsort !!x
 
   let gen_cast_float fsort rmode sign bitv =
     let open IEEE754 in
