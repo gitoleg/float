@@ -60,11 +60,11 @@ let eval x =
      match Semantics.get GE.exp s with
      | None -> printf "Semantics.get: none!\n"; None
      | Some e ->
-        printf "%s\n" (Exp.to_string e); None
-        (* let _a = Type.infer_exn e in
-         * match Expi.eval e with
-         * | Bil.Imm w -> Some w
-         * | _ -> assert false *)
+        printf "%s\n" (Exp.to_string e);
+        let _a = Type.infer_exn e in
+        match Expi.eval e with
+        | Bil.Imm w -> Some w
+        | _ -> assert false
 
 let enum_bits w =
   let bits = Word.(enum_bits w BigEndian) in
@@ -180,17 +180,25 @@ let sqrt x ctxt =
   | Some ours ->
      assert_bool "sqrt" (bit_equal "sqrt" real ours)
 
-let ( + ) = binop `Add
-let ( - ) = binop `Sub
-let ( * ) = binop `Mul
-let ( / ) = binop `Div
-
 let make_float s e c =
   let s = Word.of_int ~width:1 s in
   let e = Word.of_int ~width:11 e in
   let c = Word.of_int ~width:52 c in
   let w = Word.(concat (concat s e) c) in
   Word.signed w |> Word.to_int64_exn |> Int64.float_of_bits
+
+let small_test () =
+  let x = of_float (make_float 0 2011 0xFFFFFFFFF) in
+  let y = of_float (make_float 0 0111 0xccccccccc) in
+  let z = of_float (make_float 0 0555 0xaaaaaaaaa) in
+  let (+) = G.fadd fsort G.rne in
+  let r = x + y + z + y in
+  eval r |> ignore
+
+let ( + ) = binop `Add
+let ( - ) = binop `Sub
+let ( * ) = binop `Mul
+let ( / ) = binop `Div
 
 let neg x = ~-. x
 let nan = Float.nan
@@ -460,19 +468,10 @@ let suite () =
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
   ] @ make_random ~times:50000
 
-(* let () = printf "x : %s\n" (string_of_bits (Word.of_int64 0xFFFF_FFFF_FFFF_FFFL)) *)
-
-
-
-let a() = printf "x : %s\n" (string_of_bits64 (Int64.float_of_bits 974381688320862858L))
-let a() = printf "y : %s\n" (string_of_bits64 (Int64.float_of_bits (-5590604654947855237L)))
 
 let suite () =
   "test" >::: [
-      (* "mytest1" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L); *)
-      (* "mytest2" >:: 2.0 * smallest_nonzero; *)
-      (* "mytest" >:: make_float 0 2046 0xFFFF_FFFF_FFFF_FFF + make_float 0 2046 1; *)
-      "sqrt"  >:: sqrt 8.0;
+      "sqrt"  >:: 8.0 / 2.0 ;
     ]
 
 let result x =
@@ -497,4 +496,4 @@ let deconstruct x =
 (* let () = deconstruct nan
  * let () = deconstruct (Float.neg_infinity *. Float.neg_infinity) *)
 
-let  () = run_test_tt_main (suite ())
+let () = run_test_tt_main (suite ())
