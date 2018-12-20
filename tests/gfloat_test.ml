@@ -362,6 +362,7 @@ let suite () =
       "biggest_sub + small"  >:: biggest_subnormal + smallest_nonzero;
       "biggest_normal + small"  >:: biggest_normal + smallest_nonzero;
       "biggest_normal + biggest_subnorm"  >:: biggest_normal + biggest_subnormal;
+      "near inf case" >:: make_float 0 2046 0xFFFF_FFFF_FFFF_FFF + make_float 0 2046 1;
 
       (* sub *)
       "4.2 - 2.28"    >:: 4.2 - 2.28;
@@ -395,6 +396,7 @@ let suite () =
       "biggest_normal - small"  >:: biggest_normal - smallest_nonzero;
       "biggest_normal - biggest_subnorm"  >:: biggest_normal - biggest_subnormal;
       "biggest_subnorm - biggest_normal"  >:: biggest_subnormal - biggest_normal;
+      "near inf case" >:: make_float 1 2046 0xFFFF_FFFF_FFFF_FFF - make_float 0 2046 1;
 
       (* mul *)
       "1.0 * 2.5"    >:: 1.0 * 2.5;
@@ -469,7 +471,8 @@ let suite () =
   "test" >::: [
       (* "mytest1" >:: of_int64 974381688320862858L * of_int64 (-5590604654947855237L); *)
       (* "mytest2" >:: 2.0 * smallest_nonzero; *)
-   "mytest" >:: sqrt 8.0;
+      (* "mytest" >:: make_float 0 2046 0xFFFF_FFFF_FFFF_FFF + make_float 0 2046 1; *)
+      "sqrt"  >:: sqrt 8.0;
     ]
 
 let result x =
