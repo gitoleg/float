@@ -472,9 +472,11 @@ module Make(B : Theory.Basic) = struct
   let leading_one sort =
     B.(one sort lsl (of_int sort Caml.(Bits.size sort - 1)))
 
-  let fadd_raw fsort rm sign xexpn xcoef yexpn ycoef f =
+  let fadd_finite fsort rm x y =
     let open B in
     let exps, sigs = floats fsort in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun _ yexpn ycoef ->
     ite (xexpn > yexpn) (xexpn - yexpn) (yexpn - xexpn) >=> fun lost_bits ->
     match_ [
         (xexpn = yexpn) --> zero sigs;
@@ -493,22 +495,14 @@ module Make(B : Theory.Basic) = struct
     ite (sum < xcoef) (round' || sticky') sticky' >=> fun sticky ->
     ite (sum < xcoef) (sum lsr one sigs) sum >=> fun coef ->
     ite (sum < xcoef) (coef lor leading_one sigs) coef >=> fun coef ->
-    is_round_up rm sign coef guard round sticky >=> fun up ->
+    is_round_up rm xsign coef guard round sticky >=> fun up ->
     ite up (succ coef) coef >=> fun coef' ->
     (is_zero coef' && non_zero coef) >=> fun rnd_overflow ->
     ite rnd_overflow (leading_one sigs) coef' >=> fun coef ->
     ite rnd_overflow (succ expn) expn >=> fun expn' ->
     ite (expn > max_exponent exps) (zero sigs) coef >=> fun coef ->
     norm expn coef @@ fun expn coef ->
-    expn >>= fun expn ->
-    coef >>= fun coef ->
-    f sign !!expn !!coef
-
-  let fadd_finite fsort rm x y =
-    unpack fsort x @@ fun xsign xexpn xcoef ->
-    unpack fsort y @@ fun _ysign yexpn ycoef ->
-    fadd_raw fsort rm xsign xexpn xcoef yexpn ycoef  @@ fun sign expn coef ->
-    pack fsort sign expn coef
+    pack fsort xsign expn coef
 
   let extend bitv ~addend f =
     bitv >>-> fun bitv sort ->
@@ -535,9 +529,11 @@ module Make(B : Theory.Basic) = struct
           f loss lost_bits xcoef ycoef);
       ] ~default:(f (zero sigs) (zero exps) !!xcoef ycoef)
 
-  let fsub_raw fsort rm xsign xexpn xcoef yexpn ycoef f =
+  let fsub_finite fsort rm x y =
     let open B in
     let exps, sigs = floats fsort in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun ysign yexpn ycoef ->
     extend xcoef ~addend:1 @@ fun xcoef sigs' ->
     extend ycoef ~addend:1 @@ fun ycoef _ ->
     or_ (xexpn < yexpn) (and_ (xexpn = yexpn) (xcoef < ycoef)) >=> fun swap ->
@@ -562,30 +558,16 @@ module Make(B : Theory.Basic) = struct
     ite up (succ coef) coef >=> fun coef' ->
     (is_zero coef' && non_zero coef) >=> fun rnd_overflow ->
     ite rnd_overflow (leading_one sigs) coef' >=> fun coef ->
-    ite rnd_overflow (succ expn) expn >=> fun expn' ->
-    norm expn coef @@ fun expn coef -> f sign expn coef
-
-  let add_or_sub_raw fsort is_sub rm xsign xexpn xcoef ysign yexpn ycoef f =
-    let open B in
-    let ( lxor ) = xor in
-    let is_sub = is_sub lxor (xsign lxor ysign) in
-    ite is_sub (fsub_raw fsort rm xsign xexpn xcoef yexpn ycoef f)
-    (fadd_raw fsort rm xsign xexpn xcoef yexpn ycoef f)
+    ite rnd_overflow (succ expn) expn >=> fun expn ->
+    norm expn coef @@ fun expn coef -> pack fsort sign expn coef
 
   let add_or_sub_finite is_sub fsort rm x y =
-    unpack fsort x @@ fun xsign xexpn xcoef ->
-    unpack fsort y @@ fun ysign yexpn ycoef ->
-    add_or_sub_raw fsort is_sub rm xsign xexpn xcoef ysign yexpn ycoef @@
-      fun sign expn coef -> pack fsort sign expn coef
+    B.ite is_sub (fsub_finite fsort rm x y)
+    (fadd_finite fsort rm x y)
 
   let fsum_special fsort is_sub x y =
     let open B in
     let not = inv in
-    let ( lxor ) = xor in
-    let s1 = is_sub in
-    let s2 = fsign x in
-    let s3 = fsign y in
-    let is_sub = s1 lxor (s2 lxor s3) in
     with_special fsort x @@ fun ~is_inf:xinf ~is_snan:xsnan ~is_qnan:xqnan ->
     with_special fsort y @@ fun ~is_inf:yinf ~is_snan:ysnan ~is_qnan:yqnan ->
     (xsnan || xqnan) >=> fun xnan ->
@@ -600,6 +582,11 @@ module Make(B : Theory.Basic) = struct
 
   let add_or_sub ~is_sub fsort rm x y =
     let open B in
+    let ( lxor ) = xor in
+    let s1 = is_sub in
+    let s2 = fsign x in
+    let s3 = fsign y in
+    let is_sub = s1 lxor (s2 lxor s3) in
     ite (is_finite fsort x && is_finite fsort y)
       (add_or_sub_finite is_sub fsort rm x y)
       (fsum_special fsort is_sub x y)
@@ -627,7 +614,7 @@ module Make(B : Theory.Basic) = struct
      Also, say we have 53-bit precision: C = c52 . c51 . c50 ... c0.
      The result is C = c105 . c104 ... c0, where result is in first 53
      bits.  *)
-  let fmul_raw fsort rm xsign xexpn xcoef ysign yexpn ycoef f =
+  let fmul_finite fsort rm x y =
     let open B in
     let double e c f =
       double e @@ fun e es ->
@@ -636,6 +623,8 @@ module Make(B : Theory.Basic) = struct
     let precision = precision fsort in
     let maxe = max_exponent (exps fsort) in
     let exps,sigs = floats fsort in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun ysign yexpn ycoef ->
     xor xsign ysign >=> fun sign ->
     normalize_coef xcoef @@ fun xcoef dx ->
     normalize_coef ycoef @@ fun ycoef dy ->
@@ -655,24 +644,16 @@ module Make(B : Theory.Basic) = struct
     expn > unsigned exps' maxe >=> fun is_overflow ->
     ite coef_overflowed (one sigs') (zero sigs') >=> fun from_overflow ->
     coef lsr (from_overflow + unsigned sigs' underflow) >=> fun coef ->
-
     coef lsl one sigs' >=> fun coef ->
     low sigs coef >=> fun loss ->
     high sigs coef >=> fun coef ->
     round rm sign coef loss prec @@ fun coef rnd_overflow ->
     low exps expn >=> fun expn ->
     norm expn coef @@ fun expn coef ->
-
     ite is_underflow (zero exps) expn >=> fun expn ->
     ite is_overflow (ones exps) expn >=> fun expn ->
     ite (is_overflow || is_underflow) (zero sigs) coef >=> fun coef ->
-    f sign expn coef
-
-  let fmul_finite fsort rm x y =
-    unpack fsort x @@ fun xsign xexpn xcoef ->
-    unpack fsort y @@ fun ysign yexpn ycoef ->
-    fmul_raw fsort rm xsign xexpn xcoef ysign yexpn ycoef @@
-    fun sign expn coef -> pack fsort sign expn coef
+    pack fsort sign expn coef
 
   let fmul_special fsort x y =
     let open B in
@@ -725,7 +706,7 @@ module Make(B : Theory.Basic) = struct
           loop Caml.(i - 1) (bit :: bits) next_nomin) in
     loop Caml.(prec - 1) [] !!nomin
 
-  let fdiv_raw fsort rm xsign xexpn xcoef ysign yexpn ycoef f =
+  let fdiv_finite fsort rm x y  =
     let open B in
     let norm_nominator exps sigs nomin denom f =
       ite (nomin < denom) (nomin lsl one sigs) nomin >=> fun nomin' ->
@@ -733,6 +714,8 @@ module Make(B : Theory.Basic) = struct
       f nomin' dexpn in
     let prec = precision fsort in
     let exps,sigs = floats fsort in
+    unpack fsort x @@ fun xsign xexpn xcoef ->
+    unpack fsort y @@ fun ysign yexpn ycoef ->
     xor xsign ysign >=> fun sign ->
     normalize_coef xcoef @@ fun nomin dx ->
     normalize_coef ycoef @@ fun denom dy ->
@@ -757,11 +740,10 @@ module Make(B : Theory.Basic) = struct
     ite underflowed (coef lsr shift) coef >=> fun coef ->
     round rm sign coef loss shift @@ fun coef _ ->
     ite underflowed (min_exponent exps) expn >=> fun expn ->
-
     ite is_underflow (zero exps) expn >=> fun expn ->
     ite is_overflow  (ones exps) expn >=> fun expn ->
     ite (is_overflow || is_underflow) (zero sigs) coef >=> fun coef ->
-    norm expn coef @@ fun expn coef -> f sign expn coef
+    norm expn coef @@ fun expn coef -> pack fsort sign expn coef
 
   let fdiv_special fsort x y =
     let open B in
@@ -781,12 +763,6 @@ module Make(B : Theory.Basic) = struct
       is_inf --> with_sign (xor xsign ysign) x;
       (xsnan || xqnan) --> transform_to_quite fsort x
     ] ~default:(transform_to_quite fsort y)
-
-  let fdiv_finite fsort rm x y =
-    unpack fsort x @@ fun xsign xexpn xcoef ->
-    unpack fsort y @@ fun ysign yexpn ycoef ->
-    fdiv_raw fsort rm xsign xexpn xcoef ysign yexpn ycoef @@
-     fun sign expn coef -> pack fsort sign expn coef
 
   let fdiv fsort rm x y =
     let open B in
