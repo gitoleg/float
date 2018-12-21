@@ -60,7 +60,7 @@ let eval x =
      match Semantics.get GE.exp s with
      | None -> printf "Semantics.get: none!\n"; None
      | Some e ->
-        printf "%s\n" (Exp.to_string e);
+        (* printf "%s\n" (Exp.to_string e); *)
         let _a = Type.infer_exn e in
         match Expi.eval e with
         | Bil.Imm w -> Some w
@@ -471,7 +471,7 @@ let suite () =
 
 let suite () =
   "test" >::: [
-      "sqrt"  >:: 8.0 / 2.0 ;
+      "sqrt"  >:: sqrt 8.0  ;
     ]
 
 let result x =
