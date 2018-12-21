@@ -1,5 +1,6 @@
 open Core_kernel
 open OUnit2
+open Bap_plugins.Std
 open Bap.Std
 open Bap_knowledge
 open Bap_core_theory
@@ -92,6 +93,19 @@ let string_of_bits64 x =
       let s = sprintf "%s%s" acc a in
       if x then s @@ 1
       else s @@ 0)
+
+let deconstruct x =
+  let wi = Word.to_int_exn in
+  let y = Int64.bits_of_float x in
+  let w = Word.of_int64 y in
+  let expn = Word.extract_exn ~hi:62 ~lo:52 w in
+  let bias = Word.of_int ~width:11 1023 in
+  let expn' = Word.(signed (expn - bias)) in
+  let frac = Word.extract_exn ~hi:51 w in
+  printf "ocaml %f: bits %s, 0x%LX\n" x (string_of_bits64 x) y;
+  printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
+    x (wi expn) (wi expn') (wi frac)
+
 
 type bits11
 type bits53
@@ -468,32 +482,9 @@ let suite () =
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
   ] @ make_random ~times:50000
 
-
 let suite () =
   "test" >::: [
-      "sqrt"  >:: sqrt 8.0  ;
+      "sqrt"  >:: sqrt 8.0;
     ]
-
-let result x =
-  match eval x with
-  | Some e -> printf "result %s\n" (Word.to_string e)
-  | _ -> printf "fail!\n"
-
-let deconstruct x =
-  let wi = Word.to_int_exn in
-  let y = Int64.bits_of_float x in
-  let w = Word.of_int64 y in
-  let expn = Word.extract_exn ~hi:62 ~lo:52 w in
-  let bias = Word.of_int ~width:11 1023 in
-  let expn' = Word.(signed (expn - bias)) in
-  let frac = Word.extract_exn ~hi:51 w in
-  printf "ocaml %f: bits %s, 0x%LX\n" x (string_of_bits64 x) y;
-  printf "ocaml %f: biased/unbiased expn %d/%d, coef 0x%x\n"
-    x (wi expn) (wi expn') (wi frac)
-
-(* let nan = Int64.float_of_bits (0b0_11111111111_0000000000000000000000000000111000000000000000000001L) *)
-(* let () = deconstruct 42.42 *)
-(* let () = deconstruct nan
- * let () = deconstruct (Float.neg_infinity *. Float.neg_infinity) *)
 
 let () = run_test_tt_main (suite ())
