@@ -10,7 +10,7 @@ type ('b, 'e, 't, 's) unop =
 
 type ('b, 'e, 't, 's) binop =
   ( ('b, 'e, 't, 's) fsort ->
-    rmode value t -> 's bitv value t ->  's bitv value t -> 's bitv value t)
+    rmode value t -> 's bitv value t -> 's bitv value t -> 's bitv value t)
 
 
 module Make(B : Theory.Basic) : sig
@@ -30,6 +30,5 @@ module Make(B : Theory.Basic) : sig
   val cast_int :  ('a, 'b, 'c, 'd) fsort -> 'e bitv sort -> 'd bitv value t -> 'e bitv value t
   val cast_float : ('a, 'b, 'c, 'd) fsort -> rmode value t -> 'e bitv value t -> 'd bitv value t
   val cast_float_signed : ('a, 'b, 'c, 'd) fsort -> rmode value t -> 'e bitv value t -> 'd bitv value t
-
 
 end

@@ -142,8 +142,7 @@ module Make(B : Theory.Basic) = struct
 
   let bind a body =
     a >>= fun a ->
-    let sort = Value.sort a in
-    Var.Generator.fresh sort >>= fun v ->
+    Var.Generator.fresh (Value.sort a) >>= fun v ->
     B.let_ v !!a (body (B.var v))
 
   let (>>>=) = bind
@@ -572,10 +571,11 @@ module Make(B : Theory.Basic) = struct
   let add_or_sub ~is_sub fsort rm x y =
     let open B in
     let ( lxor ) = xor in
-    let s1 = is_sub in
-    let s2 = fsign x in
-    let s3 = fsign y in
-    let is_sub = s1 lxor (s2 lxor s3) in
+    x >>>= fun x ->
+    y >>>= fun y ->
+    fsign x >>>= fun sx ->
+    fsign y >>>= fun sy ->
+    is_sub lxor (sx lxor sy) >>>= fun is_sub ->
     ite (is_finite fsort x && is_finite fsort y)
       (add_or_sub_finite is_sub fsort rm x y)
       (fsum_special fsort is_sub x y)
@@ -664,6 +664,8 @@ module Make(B : Theory.Basic) = struct
 
   let fmul fsort rm x y =
     let open B in
+    x >>>= fun x ->
+    y >>>= fun y ->
     ite (is_finite fsort x && is_finite fsort y)
       (fmul_finite fsort rm x y)
       (fmul_special fsort x y)
