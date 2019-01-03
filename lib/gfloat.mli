@@ -31,4 +31,10 @@ module Make(B : Theory.Basic) : sig
   val cast_float : ('a, 'b, 'c, 'd) fsort -> rmode value t -> 'e bitv value t -> 'd bitv value t
   val cast_float_signed : ('a, 'b, 'c, 'd) fsort -> rmode value t -> 'e bitv value t -> 'd bitv value t
 
+  (* val fsqrt : ('b, 'e, 't, 's) fsort -> rmode value t -> 's bitv value t ->
+   *             ('s,'s) mem value t -> 's bitv value t *)
+
+
+  val test : ('b, 'e, 't, 's) unop
+
 end

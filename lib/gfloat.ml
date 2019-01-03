@@ -142,7 +142,7 @@ module Make(B : Theory.Basic) = struct
 
   let bind a body =
     a >>= fun a ->
-    Var.Generator.fresh (Value.sort a) >>= fun v ->
+    Var.scoped (Value.sort a) @@ fun v ->
     B.let_ v !!a (body (B.var v))
 
   let (>>>=) = bind
@@ -828,5 +828,9 @@ module Make(B : Theory.Basic) = struct
     coef lsr unsigned sigs bits >>>= fun coef ->
     unsigned outs coef >>>= fun coef ->
     ite sign (neg coef) coef
+
+  let test fsort rm x =
+    unpack fsort x @@ fun sign expn coef ->
+    pack fsort sign expn coef
 
 end
