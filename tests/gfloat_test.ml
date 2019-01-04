@@ -102,7 +102,6 @@ let binop op x y ctxt =
   let test = op fsort G.rne (knowledge_of_float x) (knowledge_of_float y) in
   eval ~name ~expected:(word_of_float real) test ctxt
 
-(* check using of gfloat_of_int here *)
 let cast_int cast x ctxt =
   let name = sprintf "%s %d\n" (test_name cast) x in
   let expected = word_of_float (float x) in
