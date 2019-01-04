@@ -10,5 +10,6 @@ PKG oUnit
 PKG bap
 PKG bap-core-theory
 PKG bap-knowledge
+PKG bap-primus
 
 FLG -short-paths
