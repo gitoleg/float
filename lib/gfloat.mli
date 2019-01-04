@@ -25,16 +25,13 @@ module Make(B : Theory.Basic) : sig
   val fsub : ('b, 'e, 't, 's) binop
   val fmul : ('b, 'e, 't, 's) binop
   val fdiv : ('b, 'e, 't, 's) binop
-  val fsqrt : ('b, 'e, 't, 's) unop
 
   val cast_int :  ('a, 'b, 'c, 'd) fsort -> 'e bitv sort -> 'd bitv value t -> 'e bitv value t
   val cast_float : ('a, 'b, 'c, 'd) fsort -> rmode value t -> 'e bitv value t -> 'd bitv value t
   val cast_float_signed : ('a, 'b, 'c, 'd) fsort -> rmode value t -> 'e bitv value t -> 'd bitv value t
 
-  (* val fsqrt : ('b, 'e, 't, 's) fsort -> rmode value t -> 's bitv value t ->
-   *             ('s,'s) mem value t -> 's bitv value t *)
-
-
-  val test : ('b, 'e, 't, 's) unop
+  val fsqrt : ('b, 'e, 't, 's) fsort -> rmode value t ->
+              ('f, 's) mem value t -> ('f, 's) mem value t ->
+              's bitv value t -> 's bitv value t
 
 end

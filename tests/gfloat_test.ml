@@ -4,15 +4,12 @@ open Bap_plugins.Std
 open Bap_primus.Std
 open Bap.Std
 open Monads.Std
-
-module Bap_var = Var
-
 open Bap_knowledge
 open Bap_core_theory
-
-module G = Gfloat.Make(Theory.Manager)
 open Gfloat_debug
 open Gfloat_helpers
+
+module G = Gfloat.Make(Theory.Manager)
 
 [@@@warning "-3"]
 
@@ -29,10 +26,6 @@ type binop = [
   | `Div
 ] [@@deriving sexp]
 
-type unop = [
-  | `Sqrt
-] [@@deriving sexp]
-
 type cast_int = [
   | `Of_uint
   | `Of_sint
@@ -43,7 +36,7 @@ type cast_float = [
 ] [@@deriving sexp]
 
 type test = [
-    binop | unop | cast_int | cast_float
+    binop | cast_int | cast_float
 ] [@@deriving sexp]
 
 let test_name op = Sexp.to_string (sexp_of_test (op :> test))
@@ -89,22 +82,15 @@ let sigs : bits53 bitv sort = Bits.define 53
 let bitv : bits64 bitv sort = Bits.define 64
 let fsort : ((int,bits11,bits53) IEEE754.ieee754,'s) format float sort = IEEE754.(Sort.define binary64)
 
-let of_word sort w =
+let knowledge_of_word sort w =
   let v = Value.create sort Semantics.empty in
   Knowledge.return (Value.put Bil.Domain.exp v (Some (Bil.int w)))
 
-let gfloat_of_float x = of_word bitv (word_of_float x)
+let knowledge_of_float x = knowledge_of_word bitv (word_of_float x)
 
 let gfloat_of_int x =
   let bits = Word.of_int ~width:64 x in
-  of_word bitv bits
-
-let unop op x ctxt =
-  let name = sprintf "%s %g\n" (test_name op) x in
-  let real, op = match op with
-    | `Sqrt -> Float.sqrt x, G.fsqrt in
-  let test = op fsort G.rne (gfloat_of_float x) in
-  eval ~name ~expected:(word_of_float real) test ctxt
+  knowledge_of_word bitv bits
 
 let binop op x y ctxt =
   let name = sprintf "%g %s %g\n" x (test_name op) y in
@@ -113,7 +99,7 @@ let binop op x y ctxt =
     | `Sub -> x -. y, G.fsub
     | `Mul -> x *. y, G.fmul
     | `Div -> x /. y, G.fdiv in
-  let test = op fsort G.rne (gfloat_of_float x) (gfloat_of_float y) in
+  let test = op fsort G.rne (knowledge_of_float x) (knowledge_of_float y) in
   eval ~name ~expected:(word_of_float real) test ctxt
 
 (* check using of gfloat_of_int here *)
@@ -129,14 +115,14 @@ let cast_int cast x ctxt =
 let cast_float x ctxt =
   let name = sprintf "%s %g\n" (test_name `Of_float) x in
   let expected = Word.of_int ~width:64 (int_of_float x) in
-  let test = G.cast_int fsort bitv (gfloat_of_float x) in
+  let test = G.cast_int fsort bitv (knowledge_of_float x) in
   eval ~name ~expected test ctxt
 
 let ( + ) = binop `Add
 let ( - ) = binop `Sub
 let ( * ) = binop `Mul
 let ( / ) = binop `Div
-(* let sqrt = unop `Sqrt *)
+
 let of_uint = cast_int `Of_uint
 let of_sint = cast_int `Of_sint
 let to_int  = cast_float

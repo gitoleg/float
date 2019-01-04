@@ -147,6 +147,7 @@ module Make(B : Theory.Basic) = struct
 
   let (>>>=) = bind
 
+  let bits = IEEE754.Sort.bits
   let exps = IEEE754.Sort.exps
 
   let sigs fsort =
@@ -366,9 +367,9 @@ module Make(B : Theory.Basic) = struct
   let guardbits loss lost_bits f =
     let open B in
     lost_bits >>-> fun sort lost_bits ->
-    (!!lost_bits > zero sort) >>>= fun has_grd ->
-    (!!lost_bits > one sort ) >>>= fun has_rnd ->
-    (!!lost_bits > of_int sort 2) >>>= fun has_stk ->
+    !!lost_bits > zero sort >>>= fun has_grd ->
+    !!lost_bits > one sort  >>>= fun has_rnd ->
+    !!lost_bits > of_int sort 2 >>>= fun has_stk ->
     ite has_grd (pred !!lost_bits) (zero sort) >>>= fun grd_pos ->
     ite has_rnd (pred grd_pos) (zero sort) >>>= fun rnd_pos ->
     ite has_grd (testbit loss grd_pos) b0 >>>= fun grd ->
@@ -768,10 +769,9 @@ module Make(B : Theory.Basic) = struct
       (fdiv_finite fsort rm x y)
       (fdiv_special fsort x y)
 
-  let fsqrt fsort rm x =
+  let newton_raphson fsort rm init x =
+    let max = 5 in
     fadd_finite fsort rm (fone fsort) (fone fsort) >>>= fun two ->
-    fdiv_finite fsort rm x two >>>= fun init ->
-    let max = precision fsort in
     let rec run x0 n =
       fdiv_finite fsort rm x x0 >>>= fun a1 ->
       fadd_finite fsort rm x0 a1 >>>= fun a2 ->
@@ -779,6 +779,17 @@ module Make(B : Theory.Basic) = struct
       if n > max then x0
       else run x' (n + 1) in
     run init 0
+
+  let fsqrt fsort rm c1 c2 x =
+    c1 >>-> fun mems c1 ->
+    let bits = bits fsort in
+    let keys = Mems.keys mems in
+    B.high keys x >>>= fun key ->
+    B.loadw bits B.b0 !!c1 key >>>= fun c1 ->
+    B.loadw bits B.b0 c2 key >>>= fun c2 ->
+    fmul fsort rm x c1 >>>= fun x1 ->
+    fadd fsort rm x1 c2 >>>= fun init ->
+    newton_raphson fsort rm init x
 
   let gen_cast_float fsort rmode sign bitv =
     let open IEEE754 in
@@ -828,9 +839,5 @@ module Make(B : Theory.Basic) = struct
     coef lsr unsigned sigs bits >>>= fun coef ->
     unsigned outs coef >>>= fun coef ->
     ite sign (neg coef) coef
-
-  let test fsort rm x =
-    unpack fsort x @@ fun sign expn coef ->
-    pack fsort sign expn coef
 
 end
