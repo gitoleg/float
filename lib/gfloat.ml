@@ -769,27 +769,88 @@ module Make(B : Theory.Basic) = struct
       (fdiv_finite fsort rm x y)
       (fdiv_special fsort x y)
 
-  let newton_raphson fsort rm init x =
-    let max = 5 in
+  let newton_raphson fsort rm guess x =
     fadd_finite fsort rm (fone fsort) (fone fsort) >>>= fun two ->
-    let rec run x0 n =
-      fdiv_finite fsort rm x x0 >>>= fun a1 ->
-      fadd_finite fsort rm x0 a1 >>>= fun a2 ->
-      fdiv_finite fsort rm a2 two >>>= fun x' ->
-      if n > max then x0
-      else run x' (n + 1) in
-    run init 0
 
-  let fsqrt fsort rm c1 c2 x =
-    c1 >>-> fun mems c1 ->
-    let bits = bits fsort in
-    let keys = Mems.keys mems in
-    B.high keys x >>>= fun key ->
-    B.loadw bits B.b0 !!c1 key >>>= fun c1 ->
-    B.loadw bits B.b0 c2 key >>>= fun c2 ->
-    fmul fsort rm x c1 >>>= fun x1 ->
-    fadd fsort rm x1 c2 >>>= fun init ->
+    fdiv_finite fsort rm x guess >>>= fun a1 ->
+    fadd_finite fsort rm guess a1 >>>= fun a2 ->
+    fdiv_finite fsort rm a2 two >>>= fun guess ->
+
+    fdiv_finite fsort rm x guess >>>= fun a1 ->
+    fadd_finite fsort rm guess a1 >>>= fun a2 ->
+    fdiv_finite fsort rm a2 two >>>= fun guess ->
+
+    fdiv_finite fsort rm x guess >>>= fun a1 ->
+    fsub_finite fsort rm guess a1 >>>= fun a2 ->
+    fdiv_finite fsort rm a2 two >>>= fun guess' ->
+    fsub_finite fsort rm guess guess'
+
+
+  let t1 = [
+      0;     1024;  3062;  5746;  9193;  13348; 18162; 23592;
+      29598; 36145; 43202; 50740; 58733; 67158; 75992; 85215;
+      83599; 71378; 60428; 50647; 41945; 34246; 27478; 21581;
+      16499; 12183; 8588;  5674;  3403;  1742;  661;   130;  ]
+
+  let t2 = [
+      0x1500;  0x2ef8;  0x4d67;  0x6b02;  0x87be;  0xa395;  0xbe7a;  0xd866;
+      0xf14a;  0x1091b; 0x11fcd; 0x13552; 0x14999; 0x15c98; 0x16e34; 0x17e5f;
+      0x18d03; 0x19a01; 0x1a545; 0x1ae8a; 0x1b5c4; 0x1bb01; 0x1bfde; 0x1c28d;
+      0x1c2de; 0x1c0db; 0x1ba73; 0x1b11c; 0x1a4b5; 0x1953d; 0x18266; 0x16be0;
+      0x1683e; 0x179d8; 0x18a4d; 0x19992; 0x1a789; 0x1b445; 0x1bf61; 0x1c989;
+      0x1d16d; 0x1d77b; 0x1dddf; 0x1e2ad; 0x1e5bf; 0x1e6e8; 0x1e654; 0x1e3cd;
+      0x1df2a; 0x1d635; 0x1cb16; 0x1be2c; 0x1ae4e; 0x19bde; 0x1868e; 0x16e2e;
+      0x1527f; 0x1334a; 0x11051; 0xe951;  0xbe01;  0x8e0d;  0x5924;  0x1edd;  ]
+
+  let get tab index =
+    index >>-> fun sort index ->
+    let of_int = B.of_int sort in
+    let rec find from to_ =
+      if Int.(from + 1 = to_) then List.nth_exn tab from |> of_int
+      else
+        let middle = from + (to_ - from) / 2 in
+        B.(ite (!!index >= of_int sort middle) (find middle to_)
+          (find from middle)) in
+    find 0 (List.length tab)
+
+  let _fsqrt fsort rm x =
+    let open B in
+    let bits = IEEE754.Sort.bits fsort in
+    x lsr of_int bits 33 >>>= fun x0 ->
+    x0 + of_int bits 0x1ff80000 >>>= fun k ->
+    of_int bits 31 land (k lsr of_int bits 15) >>>= fun index ->
+    get t1 index >>>= fun t1 ->
+    k - t1 >>>= fun y0 ->
+    y0 lsl of_int bits 32 >>>= fun init ->
     newton_raphson fsort rm init x
+
+  let reciproot_iteration fsort x y =
+    let one = fone fsort in
+    let two = fadd fsort rne one one in
+    let three = fadd fsort rne one two in
+    fdiv fsort rne three two >>>= fun a15 ->
+    fdiv fsort rne one two >>>= fun a05 ->
+    fmul fsort rne y y >>>= fun y2 ->
+    fmul fsort rne x y2 >>>= fun xy2 ->
+    fmul fsort rne xy2 a05 >>>= fun z ->
+    fsub fsort rne a15 z >>>= fun z ->
+    fmul fsort rne z y
+
+  let fsqrt fsort rm x =
+    let open B in
+    let bits = IEEE754.Sort.bits fsort in
+    x lsr of_int bits 33 >>>= fun x0 ->
+    of_int bits 0x5fe80000 - x0 >>>= fun k ->
+    of_int bits 63 land (k lsr of_int bits 14) >>>= fun index ->
+    get t2 index >>>= fun t2 ->
+    k - t2 >>>= fun y0 ->
+    y0 lsl of_int bits 32 >>>= fun y ->
+    reciproot_iteration fsort x y >>>= fun y ->
+    reciproot_iteration fsort x y >>>= fun y ->
+    reciproot_iteration fsort x y >>>= fun y ->
+    reciproot_iteration fsort x y >>>= fun y ->
+    fmul fsort rm x y
+
 
   let gen_cast_float fsort rmode sign bitv =
     let open IEEE754 in
@@ -841,3 +902,31 @@ module Make(B : Theory.Basic) = struct
     ite sign (neg coef) coef
 
 end
+
+let poly : ?theory:(module Theory.Core) ->
+           int ->
+           ('a, 's) format float sort ->
+           (int -> ('s, 's) mem var) ->
+           ('a, 's) format float value t ->
+           ('a, 's) format float value t =
+  fun ?(theory=(module Theory.Manager)) m fsort coef x ->
+  let module B = (val theory) in
+  let open B in
+  let bind a body =
+    a >>= fun a ->
+    Var.scoped (Value.sort a) @@ fun v ->
+    let_ v !!a (body v) in
+  let (>>>=) = bind in
+  let bits = Floats.size fsort in
+  let coef i =
+    loadw bits b0 (var (coef i)) (fbits x) >>>= fun c ->
+    float fsort (var c) in
+  let rec sum i y =
+    if i = m + 1 then y
+    else
+      coef i >>>= fun c ->
+      fmul rne x (var c) >>>= fun y' ->
+      fadd rne y (var y') >>>= fun y ->
+      sum (i + 1) (var y) in
+  coef 0 >>>= fun c0 ->
+  sum 1 (var c0)

@@ -70,8 +70,16 @@ let eval ?(name="") ~expected test ctxt =
   match exp test with
   | None -> assert false
   | Some e ->
+     printf "%s\n" (Exp.to_string e);
      let check =
        Eval.exp e >>| fun r ->
+
+       let r1 = Primus.Value.to_word r in
+       if Word.(r1 <> expected) then
+         let ws = Word.to_string in
+         printf "not equal:\n%s\n%s\n" (ws expected) (ws r1);
+
+
        assert_bool name Word.(Primus.Value.to_word r = expected) in
      match Main.run proj check with
      | Primus.Normal,_ -> ()
@@ -117,6 +125,19 @@ let cast_float x ctxt =
   let test = G.cast_int fsort bitv (knowledge_of_float x) in
   eval ~name ~expected test ctxt
 
+let sqrt_ x ctxt =
+  let name = sprintf "sqrt %g\n" x in
+  let expected = Float.sqrt x |> word_of_float in
+  let x = Theory.Manager.var (Var.define bitv "x") in
+  let test = G.fsqrt fsort G.rne x in
+  eval ~name ~expected test ctxt
+
+let sqrt_ x ctxt =
+  let name = sprintf "sqrt %g\n" x in
+  let expected = Float.sqrt x |> word_of_float in
+  let test = G.fsqrt fsort G.rne (knowledge_of_float x) in
+  eval ~name ~expected test ctxt
+
 let ( + ) = binop `Add
 let ( - ) = binop `Sub
 let ( * ) = binop `Mul
@@ -135,6 +156,8 @@ let some_small = make_float 0 0 2
 let biggest_subnormal = make_float 0 0 0xFFFF_FFFF_FFFF_F
 let smallest_normal = Float.(biggest_subnormal + smallest_nonzero)
 let biggest_normal = make_float 0 2046 0xFFFF_FFFF_FFFF_F
+
+let () = Random.self_init ()
 
 let random = Random.int
 let random_elt xs = List.nth_exn xs @@ random (List.length xs)
@@ -325,5 +348,10 @@ let suite () =
       "biggest_normal / biggest_subnorm"  >:: biggest_normal / biggest_subnormal;
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
   ] @ random_floats ~times:50000
+
+let suite () =
+  "Gfloat" >::: [
+      "4.0" >:: sqrt_ 0.25;
+    ]
 
 let () = run_test_tt_main (suite ())
