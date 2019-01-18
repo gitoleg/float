@@ -70,7 +70,7 @@ let eval ?(name="") ~expected test ctxt =
   match exp test with
   | None -> assert false
   | Some e ->
-     printf "%s\n" (Exp.to_string e);
+     (* printf "%s\n" (Exp.to_string e); *)
      let check =
        Eval.exp e >>| fun r ->
 
@@ -125,7 +125,7 @@ let cast_float x ctxt =
   let test = G.cast_int fsort bitv (knowledge_of_float x) in
   eval ~name ~expected test ctxt
 
-let sqrt_ x ctxt =
+let _sqrt x ctxt =
   let name = sprintf "sqrt %g\n" x in
   let expected = Float.sqrt x |> word_of_float in
   let x = Theory.Manager.var (Var.define bitv "x") in
@@ -135,6 +135,8 @@ let sqrt_ x ctxt =
 let sqrt_ x ctxt =
   let name = sprintf "sqrt %g\n" x in
   let expected = Float.sqrt x |> word_of_float in
+  printf "\ninput: %g (%s)\n" x (string_of_bits64 x);
+
   let test = G.fsqrt fsort G.rne (knowledge_of_float x) in
   eval ~name ~expected test ctxt
 
@@ -349,9 +351,17 @@ let suite () =
       "biggest_normal / smallest_normal"  >:: biggest_normal / smallest_normal;
   ] @ random_floats ~times:50000
 
+let random_sqrt ~times =
+  List.init times ~f:(fun i ->
+      let f (ctxt : test_ctxt) =
+        let x = random_float () in
+        sqrt_ x ctxt in
+      (sprintf "random%d" i) >:: f)
+
 let suite () =
+  let of_bits = Int64.float_of_bits in
   "Gfloat" >::: [
-      "4.0" >:: sqrt_ 0.25;
+      "test1" >:: of_bits 0xec9059c2619517d5L + of_bits 0x6c52387cdb6aefadL;
     ]
 
 let () = run_test_tt_main (suite ())

@@ -233,12 +233,12 @@ module Make(B : Theory.Basic) = struct
       not (ones lsr one bits) >>>= fun one ->
       one lor bitv) bitv
 
-  let fone fsort =
+  let fone fsort sign =
     let open IEEE754 in
     let {bias; t} = Sort.spec fsort in
     let expn = B.of_int (Sort.exps fsort) bias in
     let sigs = Bits.define t in
-    pack_raw fsort B.b0 expn (B.zero sigs)
+    pack_raw fsort sign expn (B.zero sigs)
 
   let inf fsort sign =
     let open B in
@@ -347,6 +347,7 @@ module Make(B : Theory.Basic) = struct
       ~f:(fun fin (cond, ok) -> B.ite cond ok fin)
 
   let (-->) x y = x,y
+  let anything_else = B.b1
 
   let extract_last x n =
     let open B in
@@ -769,22 +770,56 @@ module Make(B : Theory.Basic) = struct
       (fdiv_finite fsort rm x y)
       (fdiv_special fsort x y)
 
+
+
+
+
+  let ftwo fsort =
+    fone fsort B.b0 >>>= fun one ->
+    fadd fsort rne one one
+
+  let fthree fsort =
+    fone fsort B.b0 >>>= fun one ->
+    ftwo fsort >>>= fun two ->
+    fadd fsort rne one two
+
+  let fhalf fsort =
+    fone fsort B.b0 >>>= fun one ->
+    ftwo fsort >>>= fun two ->
+    fdiv fsort rne one two
+
+  let fthree_halfs fsort =
+    fhalf fsort >>>= fun half ->
+    fthree fsort >>>= fun three ->
+    fmul fsort rne three half
+
+  let ffour fsort =
+    ftwo fsort >>>= fun x2 ->
+    fadd fsort rne x2 x2
+
+  let ffive fsort =
+    fthree fsort >>>= fun x3 ->
+    ftwo fsort >>>= fun x2 ->
+    fadd fsort rne x2 x3
+
+  let newton_raphson_iteration fsort rm init x =
+    ftwo fsort >>>= fun two ->
+    fdiv_finite fsort rm x init >>>= fun a1 ->
+    fadd_finite fsort rm init a1 >>>= fun a2 ->
+    fdiv_finite fsort rm a2 two
+
+  let newton_raphson_improvement fsort rm x result =
+    ftwo fsort >>>= fun two ->
+    fdiv_finite fsort rm x result >>>= fun a1 ->
+    fsub_finite fsort rm result a1 >>>= fun a2 ->
+    fdiv_finite fsort rm a2 two >>>= fun result' ->
+    fsub_finite fsort rm result result'
+
   let newton_raphson fsort rm guess x =
-    fadd_finite fsort rm (fone fsort) (fone fsort) >>>= fun two ->
-
-    fdiv_finite fsort rm x guess >>>= fun a1 ->
-    fadd_finite fsort rm guess a1 >>>= fun a2 ->
-    fdiv_finite fsort rm a2 two >>>= fun guess ->
-
-    fdiv_finite fsort rm x guess >>>= fun a1 ->
-    fadd_finite fsort rm guess a1 >>>= fun a2 ->
-    fdiv_finite fsort rm a2 two >>>= fun guess ->
-
-    fdiv_finite fsort rm x guess >>>= fun a1 ->
-    fsub_finite fsort rm guess a1 >>>= fun a2 ->
-    fdiv_finite fsort rm a2 two >>>= fun guess' ->
-    fsub_finite fsort rm guess guess'
-
+    newton_raphson_iteration fsort rm guess x >>>= fun y ->
+    newton_raphson_iteration fsort rm y x >>>= fun y ->
+    newton_raphson_iteration fsort rm y x >>>= fun y ->
+    newton_raphson_improvement fsort rm x y
 
   let t1 = [
       0;     1024;  3062;  5746;  9193;  13348; 18162; 23592;
@@ -813,7 +848,7 @@ module Make(B : Theory.Basic) = struct
           (find from middle)) in
     find 0 (List.length tab)
 
-  let _fsqrt fsort rm x =
+  let fsqrt_newton fsort rm x =
     let open B in
     let bits = IEEE754.Sort.bits fsort in
     x lsr of_int bits 33 >>>= fun x0 ->
@@ -821,35 +856,113 @@ module Make(B : Theory.Basic) = struct
     of_int bits 31 land (k lsr of_int bits 15) >>>= fun index ->
     get t1 index >>>= fun t1 ->
     k - t1 >>>= fun y0 ->
-    y0 lsl of_int bits 32 >>>= fun init ->
-    newton_raphson fsort rm init x
+    y0 lsl of_int bits 32 >>>= fun y ->
+    newton_raphson fsort rm y x
 
-  let reciproot_iteration fsort x y =
-    let one = fone fsort in
-    let two = fadd fsort rne one one in
-    let three = fadd fsort rne one two in
-    fdiv fsort rne three two >>>= fun a15 ->
-    fdiv fsort rne one two >>>= fun a05 ->
-    fmul fsort rne y y >>>= fun y2 ->
-    fmul fsort rne x y2 >>>= fun xy2 ->
-    fmul fsort rne xy2 a05 >>>= fun z ->
-    fsub fsort rne a15 z >>>= fun z ->
-    fmul fsort rne z y
+  (* 0.5 * y * (3 - x * y * y) *)
+  let reciproot_iteration fsort a3 a05 x y =
+    fmul fsort rne x y >>>= fun xy ->
+    fmul fsort rne xy y >>>= fun xy2 ->
+    fsub fsort rne a3 xy2 >>>= fun z ->
+    fmul fsort rne a05 y >>>= fun y05 ->
+    fmul fsort rne y05 z
 
-  let fsqrt fsort rm x =
+  let test_pack fsort _sign _expn _coef =
+    let bits = IEEE754.Sort.bits fsort in
+    let _sign = B.(ite _sign (one bits) (zero bits)) in
+    B.unsigned bits _expn
+
+  (* pre: fsort ">=" fsort' *)
+  let truncate fsort x rm fsort' =
+    let open B in
+    let sigs_sh = Bits.size (sigs fsort') in
+    let d_bias = Caml.(bias fsort - bias fsort') in
+    let dst_maxe = max_exponent' (Bits.size @@ exps fsort') in
+    unpack fsort x @@ fun sign expn coef ->
+    if_ (is_all_ones expn || is_zero expn)
+      ~then_:(
+        low (exps fsort') expn >>>= fun expn ->
+        high (sigs fsort') coef >>>= fun coef ->
+        pack fsort' sign expn coef)
+      ~else_:(
+        expn - of_int (exps fsort) d_bias >>>= fun expn ->
+        if_ (expn > of_int (exps fsort) dst_maxe)
+          ~then_:(inf fsort' sign)
+          ~else_:(
+            low (exps fsort') expn >>>= fun expn ->
+            coef lsl of_int (sigs fsort) sigs_sh >>>= fun truncated ->
+            high (sigs fsort') truncated >>>= fun truncated ->
+            high (sigs fsort') coef >>>= fun coef ->
+            lsb coef >>>= fun last ->
+            msb truncated >>>= fun guard ->
+            truncated lsl one (sigs fsort') >>>= fun truncated ->
+            msb truncated >>>= fun round ->
+            truncated lsl one (sigs fsort') >>>= fun truncated ->
+            non_zero truncated >>>= fun sticky ->
+            is_round_up rm sign last guard round sticky >>>= fun up ->
+            ite (is_all_ones coef && up) (succ expn) expn >>>= fun expn ->
+            ite up (succ coef) coef >>>= fun coef ->
+            ite (is_all_ones expn) (inf fsort' sign)
+              (pack fsort' sign expn coef)))
+
+  (* pre: fsort "<=" fsort' *)
+  let extend fsort x fsort' =
+    let open B in
+    let d_sigs = Caml.(Bits.size (sigs fsort') - Bits.size (sigs fsort)) in
+    let d_bias = Caml.(bias fsort' - bias fsort) in
+    unpack fsort x @@ fun sign expn coef ->
+    match_ [
+        is_all_ones expn --> ones (exps fsort');
+        (expn = min_exponent (exps fsort)) --> min_exponent (exps fsort');
+        anything_else -->
+          (unsigned (exps fsort') expn + of_int (exps fsort') d_bias);
+      ] >>>= fun expn ->
+    unsigned (sigs fsort') coef >>>= fun coef ->
+    (coef lsl (of_int (sigs fsort') d_sigs)) >>>= fun coef ->
+    pack fsort' sign expn coef
+
+  (* try use cast here *)
+  let repack fsort x fsort' =
+    unpack fsort x @@ fun sign expn coef ->
+    pack fsort' sign expn coef
+
+  let convert fsort x rm fsort' =
+    let size f = Bits.size (IEEE754.Sort.bits f) in
+    if size fsort = size fsort' then repack fsort x fsort'
+    else if size fsort < size fsort' then
+      extend fsort x fsort'
+    else truncate fsort x rm fsort'
+
+  let double_precision fsort =
+    let bits = Bits.size (bits fsort) in
+    let bits' = 2 * bits in
+    let p = Option.value_exn (IEEE754.binary bits') in
+    IEEE754.Sort.define p
+
+  let fsqrt_through_rsqrt fsort rm x =
     let open B in
     let bits = IEEE754.Sort.bits fsort in
+    let fsort' = double_precision fsort in
     x lsr of_int bits 33 >>>= fun x0 ->
     of_int bits 0x5fe80000 - x0 >>>= fun k ->
     of_int bits 63 land (k lsr of_int bits 14) >>>= fun index ->
     get t2 index >>>= fun t2 ->
     k - t2 >>>= fun y0 ->
     y0 lsl of_int bits 32 >>>= fun y ->
-    reciproot_iteration fsort x y >>>= fun y ->
-    reciproot_iteration fsort x y >>>= fun y ->
-    reciproot_iteration fsort x y >>>= fun y ->
-    reciproot_iteration fsort x y >>>= fun y ->
-    fmul fsort rm x y
+    extend fsort x fsort' >>>= fun x ->
+    extend fsort y fsort' >>>= fun y ->
+    fhalf fsort' >>>= fun a05 ->
+    fthree fsort' >>>= fun a3 ->
+    reciproot_iteration fsort' a3 a05 x y >>>= fun y ->
+    reciproot_iteration fsort' a3 a05 x y >>>= fun y ->
+    reciproot_iteration fsort' a3 a05 x y >>>= fun y ->
+    fmul fsort' rm x y >>>= fun r ->
+    truncate fsort' r rm fsort
+
+  let fsqrt = fsqrt_through_rsqrt
+
+
+
 
 
   let gen_cast_float fsort rmode sign bitv =
